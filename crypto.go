@@ -11,7 +11,7 @@ import (
 
 // Generates a random 32-byte ID and encodes it as a hexadecimal string
 // generating unique identifiers
-func genrateID() string {
+func generateID() string {
 	buf := make([]byte, 32)
 	// Fills the slice with cryptographically secure random bytes
 	io.ReadFull(rand.Reader, buf)
