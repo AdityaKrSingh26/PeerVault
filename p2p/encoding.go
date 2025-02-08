@@ -27,13 +27,14 @@ func (dec DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
 	}
 
 	// Handle stream flag
+	// Check if the incoming data is a stream
 	stream := peekBuf[0] == IncomingStream
 	if stream {
 		msg.Stream = true
 		return nil
 	}
 
-	// Handle regular payload
+	// Read the payload (non-stream data)
 	buf := make([]byte, 1028)
 	n, err := r.Read(buf)
 	if err != nil {
@@ -43,3 +44,6 @@ func (dec DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
 	msg.Payload = buf[:n]
 	return nil
 }
+
+//  If the data is not a stream, it reads up to 1028 bytes from the io.Reader
+// and stores the data in the Payload field of the RPC struct.
