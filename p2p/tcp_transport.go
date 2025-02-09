@@ -10,9 +10,9 @@ import (
 
 // TCPPeer is a struct that implements the Peer interface and represents a connection to another node over TCP.
 type TCPPeer struct {
-	net.Conn                 //underlying TCP connection
-	outbound bool            //Indicates whether this connection was created by dialing out (true) or by accepting an incoming connection (false)
-	wg       *sync.WaitGroup //manage synchronization when handling streams of data.
+	net.Conn                 
+	outbound bool            
+	wg       *sync.WaitGroup 
 }
 
 // Creates a new TCPPeer instance.
@@ -25,7 +25,6 @@ func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 }
 
 // Signals that a stream of data has finished.
-// (p *TCPPeer) is the method receiver.
 func (p *TCPPeer) CloseStream() {
 	p.wg.Done()
 }
@@ -36,22 +35,20 @@ func (p *TCPPeer) Send(B []byte) error {
 	return err
 }
 
-// configuration option for TCPTansport
 type TCPTransportOpts struct {
 	ListenAddr    string
-	HandshakeFunc HandshakeFunc    //perform a handshake when on new connection
-	Decoder       Decoder          //decode incoming messages
-	OnPeer        func(Peer) error //callback when a new peer is connected
+	HandshakeFunc HandshakeFunc
+	Decoder       Decoder
+	OnPeer        func(Peer) error
 }
 
 // manage TCP connections and communication with other nodes.
 type TCPTransport struct {
 	TCPTransportOpts
-	listener net.Listener //accepting incoming connections.
-	rpcch    chan RPC     //channel for receiving incoming RPC (Remote Procedure Call) messages.
+	listener net.Listener
+	rpcch    chan RPC
 }
 
-// Creates a new TCPTransport instance.
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOpts: opts,
@@ -64,7 +61,6 @@ func (t *TCPTransport) Addr() string {
 	return t.ListenAddr
 }
 
-// read only channel that receives incoming RPC messages.
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcch
 }
@@ -74,7 +70,6 @@ func (t *TCPTransport) Close() error {
 	return t.listener.Close()
 }
 
-// dial a remote node and establish a connection.
 // implements the Transport interface.
 func (t *TCPTransport) Dial(addr string) error {
 	conn, err := net.Dial("tcp", addr)
@@ -121,35 +116,29 @@ func (t *TCPTransport) startAcceptLoop() {
 func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	var err error
 
-	// Ensures the connection is closed when the function exits, even if an error occurs.
 	defer func() {
 		fmt.Printf("Dropping peer connections: %s", err)
 		conn.Close()
 	}()
 
-	// 1. Creates a TCPPeer for the connection.
 	peer := NewTCPPeer(conn, outbound)
 
-	// 2. Performs a handshake to verify the connection.
 	if err = t.HandshakeFunc(peer); err != nil {
 		return
 	}
 
-	// 3. Calls the OnPeer callback. Notifies the application that a new peer has been connected.
 	if t.OnPeer != nil {
 		if err = t.OnPeer(peer); err != nil {
 			return
 		}
 	}
 
-	// 4. Enters a read loop to decode and process incoming messages.
 	for {
 		rpc := RPC{}
 		err = t.Decoder.Decode(conn, &rpc)
 		if err != nil {
 			return
 		}
-		// Set the Source of the Message:
 		rpc.From = conn.RemoteAddr().String()
 		// If the message is a stream, it waits for the stream to finish.
 		if rpc.Stream {

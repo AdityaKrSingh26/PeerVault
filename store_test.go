@@ -36,34 +36,28 @@ func TestStore(t *testing.T) {
 		key := fmt.Sprintf("foo_%d", i)
 		data := []byte("some jpg bytes")
 
-		// Write data to the store
 		if _, err := s.writeStream(id, key, bytes.NewReader(data)); err != nil {
 			t.Error(err)
 		}
 
-		// Check if the file exists
 		if ok := s.Has(id, key); !ok {
 			t.Errorf("expected to have key %s", key)
 		}
 
-		// Read the file
 		_, r, err := s.Read(id, key)
 		if err != nil {
 			t.Error(err)
 		}
 
-		// Compare the read data with the original data
 		b, _ := io.ReadAll(r)
 		if string(b) != string(data) {
 			t.Errorf("want %s have %s", data, b)
 		}
 
-		// Delete the file
 		if err := s.Delete(id, key); err != nil {
 			t.Error(err)
 		}
 
-		// Verify that the file no longer exists
 		if ok := s.Has(id, key); ok {
 			t.Errorf("expected to NOT have key %s", key)
 		}
@@ -73,7 +67,6 @@ func TestStore(t *testing.T) {
 // initializes a new Store with the CAS path transformation function
 func newStore() *Store {
 	opts := StoreOpts{
-		// Use content-addressable storage function
 		PathTransformFunc: CASPathTransformFunc,
 	}
 	return NewStore(opts)
