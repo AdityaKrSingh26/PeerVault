@@ -13,25 +13,28 @@ import (
 	"github.com/AdityaKrSingh26/PeerVault/p2p"
 )
 
+// configuration options
 type FileServerOpts struct {
 	ID                string
-	EncKey            []byte
-	StorageRoot       string
-	PathTransformFunc PathTransformFunc
-	Transport         p2p.Transport
-	BootstrapNodes    []string
+	EncKey            []byte            // Encryption key
+	StorageRoot       string            // Directory for file storage.
+	PathTransformFunc PathTransformFunc // Function to transform file paths
+	Transport         p2p.Transport     // P2P transport layer
+	BootstrapNodes    []string          // List of peer addresses to connect to on startup.
 }
 
+// Manages file storage, peer connections, and network communication.
 type FileServer struct {
 	FileServerOpts
 
-	peerLock sync.Mutex
-	peers    map[string]p2p.Peer
+	peerLock sync.Mutex          // Mutex to synchronize access to the peers map
+	peers    map[string]p2p.Peer //Map of connected peers
 
 	store  *Store
-	quitch chan struct{}
+	quitch chan struct{} // Channel to signal the server to stop
 }
 
+// Initializes a new "FileServer" instance.
 func NewFileServer(opts FileServerOpts) *FileServer {
 	storeOpts := StoreOpts{
 		Root:              opts.StorageRoot,
@@ -50,6 +53,7 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 	}
 }
 
+// Sends a message to all connected peers.
 func (s *FileServer) broadcast(msg *Message) error {
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
@@ -66,22 +70,28 @@ func (s *FileServer) broadcast(msg *Message) error {
 	return nil
 }
 
+// Generic message wrapper
 type Message struct {
 	Payload any
 }
 
+// Notifies peers about a file being stored
 type MessageStoreFile struct {
 	ID   string
 	Key  string
 	Size int64
 }
 
+// Requests a file from peers
 type MessageGetFile struct {
 	ID  string
 	Key string
 }
 
+// Retrieves a file from the local store or fetches it from the network.
 func (s *FileServer) Get(key string) (io.Reader, error) {
+
+	// Checks if the file exists locally.
 	if s.store.Has(s.ID, key) {
 		fmt.Printf("[%s] serving file (%s) from local disk\n", s.Transport.Addr(), key)
 		_, r, err := s.store.Read(s.ID, key)
@@ -90,25 +100,27 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 
 	fmt.Printf("[%s] dont have file (%s) locally, fetching from network...\n", s.Transport.Addr(), key)
 
+	// If not, broadcasts a MessageGetFile request to peers.
 	msg := Message{
 		Payload: MessageGetFile{
 			ID:  s.ID,
 			Key: hashKey(key),
 		},
 	}
-
 	if err := s.broadcast(&msg); err != nil {
 		return nil, err
 	}
 
 	time.Sleep(time.Millisecond * 500)
 
+	// Receives the file from a peer and stores it locally.
 	for _, peer := range s.peers {
 		// First read the file size so we can limit the amount of bytes that we read
 		// from the connection, so it will not keep hanging.
 		var fileSize int64
 		binary.Read(peer, binary.LittleEndian, &fileSize)
 
+		// storing the file locally
 		n, err := s.store.WriteDecrypt(s.EncKey, s.ID, key, io.LimitReader(peer, fileSize))
 		if err != nil {
 			return nil, err
@@ -123,6 +135,7 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 	return r, err
 }
 
+// Stores a file locally and notifies peers.
 func (s *FileServer) Store(key string, r io.Reader) error {
 	var (
 		fileBuffer = new(bytes.Buffer)
@@ -168,10 +181,12 @@ func (s *FileServer) Stop() {
 	close(s.quitch)
 }
 
+// Handles new peer connections.
 func (s *FileServer) OnPeer(p p2p.Peer) error {
 	s.peerLock.Lock()
 	defer s.peerLock.Unlock()
 
+	// Adds the peer to the peers map.
 	s.peers[p.RemoteAddr().String()] = p
 
 	log.Printf("connected with remote %s", p.RemoteAddr())
@@ -179,6 +194,7 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 	return nil
 }
 
+// Main event loop for handling incoming messages.
 func (s *FileServer) loop() {
 	defer func() {
 		log.Println("file server stopped due to error or user quit action")
@@ -202,6 +218,7 @@ func (s *FileServer) loop() {
 	}
 }
 
+// Processes incoming messages.
 func (s *FileServer) handleMessage(from string, msg *Message) error {
 	switch v := msg.Payload.(type) {
 	case MessageStoreFile:
