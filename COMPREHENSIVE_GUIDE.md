@@ -3,17 +3,18 @@
 ## Table of Contents
 1. [Project Overview](#project-overview)
 2. [Architecture & Design](#architecture--design)
-3. [Core Components](#core-components)
-4. [Technical Implementation](#technical-implementation)
-5. [Network Protocol](#network-protocol)
-6. [Security & Encryption](#security--encryption)
-7. [File Storage System](#file-storage-system)
-8. [Peer-to-Peer Communication](#peer-to-peer-communication)
-9. [Development Setup](#development-setup)
-10. [Usage Examples](#usage-examples)
-11. [Testing Strategy](#testing-strategy)
-12. [Project Structure](#project-structure)
-13. [Future Enhancements](#future-enhancements)
+3. [Detailed System Flowchart](#detailed-system-flowchart)
+4. [Core Components](#core-components)
+5. [Technical Implementation](#technical-implementation)
+6. [Network Protocol](#network-protocol)
+7. [Security & Encryption](#security--encryption)
+8. [File Storage System](#file-storage-system)
+9. [Peer-to-Peer Communication](#peer-to-peer-communication)
+10. [Development Setup](#development-setup)
+11. [Usage Examples](#usage-examples)
+12. [Testing Strategy](#testing-strategy)
+13. [Project Structure](#project-structure)
+14. [Future Enhancements](#future-enhancements)
 
 ---
 
@@ -62,6 +63,372 @@
 3. **Security-First**: Encryption is built into the core architecture
 4. **Scalability**: Can handle an arbitrary number of nodes
 5. **Simplicity**: Minimal dependencies and straightforward protocol
+
+---
+
+## Detailed System Flowchart
+
+### System Initialization Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SYSTEM STARTUP                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Create FileServer Instance                                               │
+│    ├── Generate unique Node ID (32-byte random hex)                         │
+│    ├── Create encryption key (256-bit AES key)                              │
+│    ├── Initialize local storage (Store)                                     │
+│    ├── Setup TCP transport layer                                            │
+│    └── Configure bootstrap nodes list                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Start Network Transport                                                  │
+│    ├── Bind to specified TCP port (e.g., :3000)                             │
+│    ├── Start accepting incoming connections                                 │
+│    └── Begin listen loop for new peers                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Bootstrap Network Connections                                            │
+│    ├── For each bootstrap node address:                                     │
+│    │   ├── Establish TCP connection                                         │
+│    │   ├── Perform handshake (NOPHandshakeFunc)                             │
+│    │   ├── Add peer to peers map                                            │
+│    │   └── Start message handling goroutine                                 │
+│    └── Begin main event loop                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### File Storage Operation Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        FILE STORE REQUEST                                   │
+│                     server.Store(key, reader)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Prepare File Data                                                        │
+│    ├── Create TeeReader to duplicate stream                                 │
+│    ├── One stream goes to local storage                                     │
+│    └── One stream buffered for network distribution                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Local Storage Process                                                    │
+│    ├── Transform key using CASPathTransformFunc                             │
+│    │   ├── Hash key with SHA-1: "myfile.txt" → "a1b2c3d4e5..."              │
+│    │   ├── Split hash into directories: "a1b2c/3d4e5/f6789/..."             │
+│    │   └── Create full path: "storage/nodeID/a1b2c/3d4e5/.../hash"          │
+│    ├── Create directory structure recursively                               │
+│    ├── Write encrypted file to disk using writeStream()                     │
+│    └── Return bytes written                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Network Broadcast Preparation                                            │
+│    ├── Create MessageStoreFile struct:                                      │
+│    │   ├── ID: current node identifier                                      │
+│    │   ├── Key: hashed key (MD5 of original key)                            │
+│    │   └── Size: file size + 16 bytes (IV overhead)                         │
+│    ├── Wrap in Message struct                                               │
+│    └── Serialize using GOB encoding                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. Broadcast to All Peers                                                   │
+│    ├── For each connected peer:                                             │
+│    │   ├── Send IncomingMessage header (0x1)                                │
+│    │   └── Send serialized MessageStoreFile                                 │
+│    └── All peers now expect incoming file stream                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. Stream File to All Peers                                                 │
+│    ├── Create MultiWriter for all peer connections                          │
+│    ├── Send IncomingStream header (0x2) to all peers                        │
+│    ├── Encrypt file data using copyEncrypt():                               │
+│    │   ├── Generate random IV (16 bytes)                                    │
+│    │   ├── Prepend IV to encrypted data                                     │
+│    │   └── Use AES-256-CTR mode encryption                                  │
+│    └── Stream encrypted data to all peers simultaneously                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 6. Peer-Side Storage Process                                               │
+│    ├── Each peer receives MessageStoreFile notification                    │
+│    ├── Peer prepares to receive file stream                                │
+│    ├── Peer receives encrypted file data                                   │
+│    ├── Peer stores encrypted file locally:                                 │
+│    │   ├── Same path transformation as originating node                    │
+│    │   ├── File stored under sender's node ID                              │
+│    │   └── Raw encrypted data written to disk                              │
+│    └── Peer closes stream connection                                       │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### File Retrieval Operation Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        FILE GET REQUEST                                     │
+│                      server.Get(key)                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Check Local Storage                                                      │
+│    ├── Transform key using CASPathTransformFunc                             │
+│    ├── Check if file exists: store.Has(nodeID, key)                         │
+│    └── Decision point: File exists locally?                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+┌─────────────────────────┐              ┌─────────────────────────┐
+│ LOCAL FILE FOUND        │              │ FILE NOT FOUND LOCALLY  │
+└─────────────────────────┘              └─────────────────────────┘
+                    │                               │
+                    ▼                               ▼
+┌─────────────────────────────────────┐  ┌────────────────────────────────────┐
+│ 2a. Serve from Local Storage        │  │ 2b. Request from Network           │
+│    ├── Open file using readStream() │  │    ├── Create MessageGetFile:      │
+│    ├── Return file size and reader  │  │    │   ├── ID: current node ID     │
+│    └── File returned to caller      │  │    │   └── Key: hashed key         │
+└─────────────────────────────────────┘  │    ├── Broadcast to all peers      │
+                    │                    │    └── Wait for response (500ms)   │
+                    ▼                    └────────────────────────────────────┘
+┌─────────────────────────────────────┐                      │
+│ END: Return File Reader             │                      ▼
+└─────────────────────────────────────┘  ┌─────────────────────────────────────┐
+                                         │ 3. Peer Response Process            │
+                                         │    ├── Peer checks: Has file?       │
+                                         │    ├── If yes: Send stream response │
+                                         │    ├── Send IncomingStream (0x2)    │
+                                         │    ├── Send file size (int64)       │
+                                         │    └── Stream file data to requester│
+                                         └─────────────────────────────────────┘
+                                                          │
+                                                          ▼
+                                         ┌─────────────────────────────────────┐
+                                         │ 4. Receive and Store File           │
+                                         │    ├── Read file size from stream   │
+                                         │    ├── Read encrypted file data     │
+                                         │    ├── Decrypt using copyDecrypt(): │
+                                         │    │   ├── Extract IV (first 16B)   │
+                                         │    │   ├── Decrypt with AES-256-CTR │
+                                         │    │   └── Write decrypted data     │
+                                         │    ├── Store file locally           │
+                                         │    └── Close peer stream            │
+                                         └─────────────────────────────────────┘
+                                                          │
+                                                          ▼
+                                         ┌─────────────────────────────────────┐
+                                         │ 5. Return File to Caller            │
+                                         │    ├── Read file from local storage │
+                                         │    ├── Create file reader           │
+                                         │    └── Return to application        │
+                                         └─────────────────────────────────────┘
+```
+
+### Network Communication Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      PEER CONNECTION ESTABLISHMENT                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. TCP Connection Initiation                                                │
+│    ├── Outbound: Dial remote address                                        │
+│    ├── Inbound: Accept incoming connection                                  │
+│    └── Create TCPPeer wrapper around net.Conn                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Handshake Process                                                        │
+│    ├── Execute HandshakeFunc (currently NOPHandshakeFunc)                   │
+│    ├── Validate peer identity (placeholder for future auth)                 │
+│    └── Establish trust relationship                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Peer Registration                                                        │
+│    ├── Add peer to FileServer peers map                                     │
+│    ├── Key: peer's remote address string                                    │
+│    ├── Value: TCPPeer instance                                              │
+│    └── Trigger OnPeer callback                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. Message Processing Loop                                                  │
+│    ├── Continuously read from connection                                    │
+│    ├── Decode messages using DefaultDecoder                                 │
+│    ├── Check first byte:                                                    │
+│    │   ├── 0x1 (IncomingMessage): Regular message                           │
+│    │   └── 0x2 (IncomingStream): File stream data                           │
+│    └── Route to appropriate handler                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Message Handling Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         MESSAGE PROCESSING                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Message Reception                                                        │
+│    ├── RPC received from transport layer                                    │
+│    ├── Contains: From address, Payload, Stream flag                         │
+│    └── Deserialize payload using GOB decoder                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Message Type Determination                                               │
+│    ├── Switch on payload type:                                              │
+│    │   ├── MessageStoreFile: Peer wants to store file                       │
+│    │   └── MessageGetFile: Peer requests file                               │
+│    └── Route to appropriate handler function                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+        ┌───────────────────────────┴───────────────────────────┐
+        ▼                                                       ▼
+┌─────────────────────────┐                      ┌─────────────────────────┐
+│ MessageStoreFile        │                      │ MessageGetFile          │
+│ Handler                 │                      │ Handler                 │
+└─────────────────────────┘                      └─────────────────────────┘
+        │                                                       │
+        ▼                                                       ▼
+┌─────────────────────────────────────┐          ┌─────────────────────────────────────┐
+│ 3a. Handle Store Request            │          │ 3b. Handle Get Request              │
+│    ├── Get peer from peers map      │          │    ├── Check if file exists locally │
+│    ├── Prepare to receive file      │          │    ├── If not found: return error   │
+│    ├── Read file size from stream   │          │    ├── If found: prepare response   │
+│    ├── Read encrypted file data     │          │    ├── Send IncomingStream header   │
+│    ├── Store file locally:          │          │    ├── Send file size as int64      │
+│    │   ├── Under sender's node ID   │          │    ├── Stream file data to peer     │
+│    │   └── Raw encrypted format     │          │    └── Close stream                 │
+│    └── Close stream connection      │          └─────────────────────────────────────┘
+└─────────────────────────────────────┘
+```
+
+### Encryption/Decryption Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ENCRYPTION PROCESS                                  │
+│                        copyEncrypt(key, src, dst)                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Initialize AES Cipher                                                    │
+│    ├── Create AES cipher block with 256-bit key                             │
+│    ├── Generate random IV (16 bytes)                                        │
+│    └── Write IV to destination (prepended to encrypted data)                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Setup Stream Cipher                                                      │
+│    ├── Create CTR (Counter) mode cipher                                     │
+│    ├── CTR mode converts block cipher to stream cipher                      │
+│    └── Initialize with AES block and IV                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Stream Processing (copyStream)                                           │
+│    ├── Read data in 32KB chunks from source                                 │
+│    ├── For each chunk:                                                      │
+│    │   ├── Apply XOR encryption: chunk XOR keystream                        │
+│    │   ├── Write encrypted chunk to destination                             │
+│    │   └── Continue until source is exhausted                               │
+│    └── Return total bytes processed                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DECRYPTION PROCESS                                  │
+│                        copyDecrypt(key, src, dst)                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Initialize AES Cipher                                                    │
+│    ├── Create AES cipher block with same 256-bit key                        │
+│    ├── Read IV from source (first 16 bytes)                                 │
+│    └── IV used to initialize decryption                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Setup Stream Cipher                                                      │
+│    ├── Create CTR mode cipher with same IV                                  │
+│    ├── CTR decryption is identical to encryption                            │
+│    └── XOR with same keystream recovers plaintext                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Stream Processing (copyStream)                                           │
+│    ├── Read encrypted data in 32KB chunks                                   │
+│    ├── For each chunk:                                                      │
+│    │   ├── Apply XOR decryption: encrypted_chunk XOR keystream              │
+│    │   ├── Write decrypted chunk to destination                             │
+│    │   └── Continue until source is exhausted                               │
+│    └── Return total bytes processed                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Error Handling and Recovery Flow
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ERROR SCENARIOS                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+        ┌───────────────────────────┼───────────────────────────┐
+        ▼                           ▼                           ▼
+┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
+│Network Errors   │      │Storage Errors   │      │Crypto Errors    │
+└─────────────────┘      └─────────────────┘      └─────────────────┘
+        │                           │                           │
+        ▼                           ▼                           ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Error Handling Strategies:                                                  │
+│                                                                             │
+│ Network Errors:                                                             │
+│ ├── Connection timeout → Log error, attempt reconnection                    │
+│ ├── Peer disconnection → Remove from peers map, continue operation          │
+│ ├── Message corruption → Log error, request retransmission                  │
+│ └── Bootstrap failure → Try alternative bootstrap nodes                     │
+│                                                                             │
+│ Storage Errors:                                                             │
+│ ├── Disk full → Log error, reject new files                                 │
+│ ├── Permission denied → Log error, check file system permissions            │
+│ ├── File not found → Return appropriate error to caller                     │
+│ └── Corruption detected → Attempt recovery from network                     │
+│                                                                             │
+│ Crypto Errors:                                                              │
+│ ├── Key generation failure → Regenerate or use fallback                     │
+│ ├── Encryption failure → Log error, reject operation                        │
+│ ├── Decryption failure → Request fresh copy from network                    │
+│ └── IV generation failure → Regenerate or abort operation                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
