@@ -58,7 +58,7 @@ func getLocalIP() string {
 // Interactive mode for file operations
 func interactiveMode(server *FileServer) {
 	scanner := bufio.NewScanner(os.Stdin)
-	
+
 	fmt.Println("\n=== PeerVault Interactive Mode ===")
 	fmt.Println("Commands:")
 	fmt.Println("  store <filename>  - Store a file with sample data")
@@ -132,7 +132,7 @@ func interactiveMode(server *FileServer) {
 				fmt.Printf("Error listing files: %v\n", err)
 				continue
 			}
-			
+
 			if len(files) == 0 {
 				fmt.Println("No files stored on this node")
 			} else {
@@ -153,7 +153,7 @@ func interactiveMode(server *FileServer) {
 				}
 				fmt.Println("└─────────────────────────────────────┴─────────────┴──────────────────────┘")
 			}
-			
+
 			// Also show files from other nodes (if any)
 			allFiles, err := server.store.ListAll()
 			if err == nil && len(allFiles) > 1 {
@@ -178,7 +178,7 @@ func interactiveMode(server *FileServer) {
 				// First stop the server to close any open files
 				server.Stop()
 				time.Sleep(500 * time.Millisecond) // Give time for cleanup
-				
+
 				err := server.store.Clear()
 				if err != nil {
 					fmt.Printf("Error cleaning storage: %v\n", err)
@@ -187,7 +187,7 @@ func interactiveMode(server *FileServer) {
 					// Clear the key mapping as well
 					server.store.keyMap = make(map[string]string)
 				}
-				
+
 				fmt.Println("Server stopped. Please restart to continue.")
 				return
 			} else {
@@ -208,10 +208,10 @@ func interactiveMode(server *FileServer) {
 func main() {
 	// Command line flags
 	var (
-		listenAddr = flag.String("addr", ":3000", "Listen address (e.g., :3000)")
-		bootstrap  = flag.String("bootstrap", "", "Bootstrap nodes (comma-separated, e.g., 192.168.1.100:3000,192.168.1.101:4000)")
+		listenAddr  = flag.String("addr", ":3000", "Listen address (e.g., :3000)")
+		bootstrap   = flag.String("bootstrap", "", "Bootstrap nodes (comma-separated, e.g., 192.168.1.100:3000,192.168.1.101:4000)")
 		interactive = flag.Bool("interactive", false, "Run in interactive mode")
-		demo       = flag.Bool("demo", false, "Run demo mode with test data")
+		demo        = flag.Bool("demo", false, "Run demo mode with test data")
 	)
 	flag.Parse()
 
@@ -245,7 +245,7 @@ func main() {
 		if len(bootstrapNodes) > 0 {
 			log.Printf("Bootstrap nodes: %v", bootstrapNodes)
 		}
-		
+
 		if err := server.Start(); err != nil {
 			log.Fatal("Server failed to start:", err)
 		}
@@ -260,11 +260,11 @@ func main() {
 	} else if *demo {
 		// Demo mode - store and retrieve some test files
 		fmt.Println("Running demo mode...")
-		
+
 		for i := 0; i < 5; i++ {
 			key := fmt.Sprintf("demo_file_%d.txt", i)
 			data := bytes.NewReader([]byte(fmt.Sprintf("Demo file %d content created at %s", i, time.Now().Format("15:04:05"))))
-			
+
 			if err := server.Store(key, data); err != nil {
 				log.Printf("Error storing %s: %v", key, err)
 			} else {
@@ -290,7 +290,7 @@ func main() {
 		fmt.Printf("PeerVault server running on %s\n", *listenAddr)
 		fmt.Printf("Local IP: %s\n", getLocalIP())
 		fmt.Printf("Use Ctrl+C to stop or --interactive flag for interactive mode\n")
-		
+
 		select {} // Block forever
 	}
 }

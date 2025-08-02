@@ -29,7 +29,7 @@ type StoreOpts struct {
 }
 
 type Store struct {
-	StoreOpts // Embeds StoreOpts (inherits its fields)
+	StoreOpts                   // Embeds StoreOpts (inherits its fields)
 	keyMap    map[string]string // Maps hash -> original key
 }
 
@@ -135,7 +135,7 @@ func (s *Store) Write(id string, key string, r io.Reader) (int64, error) {
 	// Store the key mapping
 	pathKey := s.PathTransformFunc(key)
 	s.keyMap[pathKey.Filename] = key
-	
+
 	return s.writeStream(id, key, r)
 }
 
@@ -210,73 +210,73 @@ func (s *Store) readStream(id string, key string) (int64, io.ReadCloser, error) 
 
 // FileInfo represents information about a stored file
 type FileInfo struct {
-	Key      string // Original file key
-	Hash     string // File hash (filename)
-	Size     int64  // File size in bytes
-	NodeID   string // ID of the node that stored it
+	Key    string // Original file key
+	Hash   string // File hash (filename)
+	Size   int64  // File size in bytes
+	NodeID string // ID of the node that stored it
 }
 
 // List returns information about all files stored for a given node ID
 func (s *Store) List(id string) ([]FileInfo, error) {
 	var files []FileInfo
-	
+
 	nodeDir := fmt.Sprintf("%s/%s", s.Root, id)
-	
+
 	// Check if node directory exists
 	if _, err := os.Stat(nodeDir); os.IsNotExist(err) {
 		return files, nil // Return empty list if no files stored yet
 	}
-	
+
 	// Walk through all files in the node's directory
 	err := filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		
+
 		// Skip directories, only process files
 		if info.IsDir() {
 			return nil
 		}
-		
+
 		// The filename is the hash, we need to find the original key
 		hash := info.Name()
-		
+
 		// Try to get the original key from our mapping
 		originalKey, exists := s.keyMap[hash]
 		if !exists {
 			// If not in mapping, use abbreviated hash as display name
 			originalKey = fmt.Sprintf("file_%s", hash[:8])
 		}
-		
+
 		fileInfo := FileInfo{
 			Key:    originalKey,
 			Hash:   hash,
 			Size:   info.Size(),
 			NodeID: id,
 		}
-		
+
 		files = append(files, fileInfo)
 		return nil
 	})
-	
+
 	return files, err
 }
 
 // ListAll returns information about all files stored across all nodes
 func (s *Store) ListAll() (map[string][]FileInfo, error) {
 	allFiles := make(map[string][]FileInfo)
-	
+
 	// Check if root directory exists
 	if _, err := os.Stat(s.Root); os.IsNotExist(err) {
 		return allFiles, nil
 	}
-	
+
 	// Read all node directories
 	entries, err := os.ReadDir(s.Root)
 	if err != nil {
 		return allFiles, err
 	}
-	
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			nodeID := entry.Name()
@@ -289,6 +289,6 @@ func (s *Store) ListAll() (map[string][]FileInfo, error) {
 			}
 		}
 	}
-	
+
 	return allFiles, nil
 }
