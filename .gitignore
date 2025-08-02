@@ -18,6 +18,22 @@ go.work
 
 # Go modules
 go.mod
+
+# PeerVault storage directories
+storage/
+*_network/
+*.data/
+*.storage/
+
+# Test files and scripts
+test_*
+*_test.*
+*.test
+*_OLD.*
+*_BACKUP.*
+*SUMMARY*
+
+# Go modules and dependencies
 go.sum
 
 # IDE and editor files

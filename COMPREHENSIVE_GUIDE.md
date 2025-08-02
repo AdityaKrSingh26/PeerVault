@@ -125,7 +125,7 @@
 │    ├── Transform key using CASPathTransformFunc                             │
 │    │   ├── Hash key with SHA-1: "myfile.txt" → "a1b2c3d4e5..."              │
 │    │   ├── Split hash into directories: "a1b2c/3d4e5/f6789/..."             │
-│    │   └── Create full path: "storage/nodeID/a1b2c/3d4e5/.../hash"          │
+│    │   └── Create full path: "storage/node_<port>_<timestamp>/a1b2c/3d4e5/.../hash" │
 │    ├── Create directory structure recursively                               │
 │    ├── Write encrypted file to disk using writeStream()                     │
 │    └── Return bytes written                                                 │
@@ -593,6 +593,13 @@ copyDecrypt(key, ciphertext_with_IV, plaintext) -> original_data
 
 ## File Storage System
 
+### Storage Organization
+PeerVault uses a hierarchical storage structure for better organization:
+- **Storage Root**: `storage/` directory in project root
+- **Node Directories**: `storage/node_<port>_<timestamp>/` for each node instance
+- **CAS Structure**: Content-addressed storage within each node directory
+- **Git Integration**: Storage directories automatically excluded from version control
+
 ### Content-Addressed Storage (CAS)
 Files are stored using their content hash, providing:
 - **Deduplication**: Identical files stored only once
@@ -601,17 +608,19 @@ Files are stored using their content hash, providing:
 
 ### Path Transformation Algorithm
 ```go
-// Example: key = "myfile.txt"
+// Example: key = "myfile.txt", storagePath = "storage/node_3000_123456789/"
 // 1. Hash: SHA1("myfile.txt") = "a1b2c3d4e5f6..."
 // 2. Split: ["a1b2c", "3d4e5", "f6789", ...]
-// 3. Path: "a1b2c/3d4e5/f6789/.../a1b2c3d4e5f6..."
+// 3. Path: "storage/node_3000_123456789/a1b2c/3d4e5/f6789/.../a1b2c3d4e5f6..."
 ```
 
 ### Storage Benefits
+- **Project Cleanliness**: Files organized in dedicated storage directories
 - **Balanced Distribution**: Even distribution across directory structure
 - **Scalability**: Handles millions of files efficiently
 - **Fast Lookup**: O(1) file access time
 - **Collision Resistance**: SHA-1 provides strong collision resistance
+- **Multi-Instance Support**: Different nodes use separate storage paths
 
 ### File Operations
 - **Write**: Stream → Encrypt → Store → Notify peers
