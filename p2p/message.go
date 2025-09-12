@@ -1,7 +1,5 @@
 package p2p
 
-// 0x1 represents the decimal value 1.
-// 0x2 represents the decimal value 2.
 const (
 	IncomingMessage = 0x1
 	IncomingStream  = 0x2
