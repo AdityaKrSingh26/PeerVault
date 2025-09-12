@@ -83,7 +83,7 @@ func copyDecrypt(key []byte, src io.Reader, dst io.Writer) (int, error) {
 	}
 
 	// CTR (Counter Mode) is an encryption mode that turns a block cipher into a stream cipher
-	stream := cipher.NewCTR(block, iv)
+	stream := cipher.NewCTR(block, iv) 
 
 	// copyStream to decrypt the data.
 	return copyStream(stream, block.BlockSize(), src, dst)
