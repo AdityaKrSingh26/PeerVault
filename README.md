@@ -1,8 +1,12 @@
 # PeerVault
 
-A distributed peer-to-peer file storage system built in Go with encryption, automatic replication, and comprehensive monitoring. PeerVault is a production-ready, decentralized file storage system designed for secure and resilient data distribution across peer-to-peer networks. Built entirely in Go with zero external dependencies, it provides enterprise-grade features in a lightweight, easy-to-deploy package.
+A distributed peer-to-peer file storage system built in Go with encryption, automatic replication, and comprehensive monitoring.
+
+## Overview
 
 ### What is PeerVault?
+
+PeerVault is a production-ready, decentralized file storage system designed for secure and resilient data distribution across peer-to-peer networks. Built entirely in Go with zero external dependencies, it provides enterprise-grade features in a lightweight, easy-to-deploy package.
 
 At its core, PeerVault creates a distributed storage network where files are automatically replicated across multiple nodes. When you store a file on any node, it's immediately encrypted with AES-256 encryption and propagated to all connected peers. This ensures your data remains available even if individual nodes go offline or fail.
 
@@ -101,30 +105,48 @@ cd PeerVault
 make build
 ```
 
+> [!WARNING]
+> The encryption layer has been upgraded to support authenticated encryption (using HMAC-SHA256 under an encrypt-then-MAC paradigm). Ciphertext formats are now incompatible with versions prior to this upgrade. If you have files stored with old unauthenticated ciphertext, they will fail to decrypt. It is recommended to retrieve and decrypt all files before upgrading, and re-store them after upgrading to the authenticated version.
+
 ## Configuration
 
-### Environment Variables
+PeerVault supports flexible configuration with options resolvable in the following order of precedence (highest first):
+
+1. **Command-Line Flags** (overrides everything)
+2. **Environment Variables**
+3. **YAML Config File** (specified via `--config`)
+4. **Hardcoded Defaults**
+
+### Configuration File
+
+You can start PeerVault using a YAML config file. Copy the provided [config.yaml.example](config.yaml.example) to `config.yaml`, customize the settings, and start the server:
 
 ```bash
-export PEERVAULT_KEY='your-32-byte-secure-encryption-key-here'
-export PEERVAULT_QUOTA='5GB'
+./bin/peervault -config config.yaml
 ```
 
-### Command-Line Flags
+### Environment Variables & CLI Flags
 
-| Flag                  | Description                     | Default            |
-| --------------------- | ------------------------------- | ------------------ |
-| `-addr`               | Listen address                  | `:3000`            |
-| `-advertise`          | Address to advertise to peers   | Auto-detected      |
-| `-bootstrap`          | Comma-separated bootstrap nodes | None               |
-| `-public-ip`          | Auto-detect public IP           | `false`            |
-| `-key`                | Encryption key (32 raw bytes or 64 hex characters) | **Required** |
-| `-quota`              | Maximum storage quota (e.g. 5GB)| None               |
-| `-interactive`        | Enable interactive mode         | `false`            |
-| `-verbose` / `-debug` | Enable debug logging            | `false`            |
-| `-metrics`            | Metrics server address          | Disabled           |
-| `-discover-local`     | Enable mDNS local discovery     | `false`            |
-| `-discover-pex`       | Enable peer exchange            | `false`            |
+| CLI Flag                    | Environment Variable        | Description                                            | Default            |
+| --------------------------- | --------------------------- | ------------------------------------------------------ | ------------------ |
+| `--config`                  | —                           | Path to YAML config file                               | None               |
+| `--addr`                    | `PEERVAULT_LISTEN`          | Listen address for the file server                     | `:3000`            |
+| `--advertise`               | `PEERVAULT_ADVERTISE`       | Address to advertise to peers                          | Auto-detected      |
+| `--bootstrap`               | `PEERVAULT_BOOTSTRAP`       | Comma-separated bootstrap node addresses               | None               |
+| `--public-ip`               | `PEERVAULT_PUBLIC_IP`       | Auto-detect and advertise node's public IP             | `false`            |
+| `--key`                     | `PEERVAULT_ENC_KEY`         | AES-256 encryption key (32 raw bytes or 64 hex chars)  | **Required**       |
+| `--quota`                   | `PEERVAULT_QUOTA`           | Maximum storage quota (e.g. 5GB)                       | None               |
+| `--interactive`             | `PEERVAULT_INTERACTIVE`     | Enable interactive terminal mode                       | `false`            |
+| `--demo`                    | `PEERVAULT_DEMO`            | Run demo mode with test data                           | `false`            |
+| `--verbose` / `--debug`     | `PEERVAULT_VERBOSE`         | Enable debug logging level                             | `false`            |
+| `--metrics`                 | `PEERVAULT_METRICS`         | Prometheus metrics endpoint address                    | Disabled           |
+| `--discover-local`          | `PEERVAULT_DISCOVER_LOCAL`  | Enable mDNS local discovery                            | `false`            |
+| `--discover-pex`            | `PEERVAULT_DISCOVER_PEX`    | Enable Peer Exchange (PEX)                             | `false`            |
+| `--log-level`               | `PEERVAULT_LOG_LEVEL`       | Output logging level (debug, info, warn, error)        | `info`             |
+| `--fetch-timeout`           | `PEERVAULT_FETCH_TIMEOUT`   | Timeout duration for file fetching                     | `5s`               |
+| `--pex-interval`            | `PEERVAULT_PEX_INTERVAL`    | Peer list exchange interval                            | `5m`               |
+| `--gc-interval`             | `PEERVAULT_GC_INTERVAL`     | Garbage collection execution interval                  | `1h`               |
+| `--gc-delay`                | `PEERVAULT_GC_DELAY`        | Initial garbage collection delay on boot               | `5m`               |
 
 ## Usage
 
@@ -429,8 +451,3 @@ make test-multinode
 - **Hash Algorithm**: SHA-256
 - **GC Interval**: Every 1 hour
 - **PEX Interval**: Every 5 minutes
-
-## Migration Warning (Breaking Change)
-
-> [!WARNING]
-> The encryption layer has been upgraded to support authenticated encryption (using HMAC-SHA256 under an encrypt-then-MAC paradigm). Ciphertext formats are now incompatible with versions prior to this upgrade. If you have files stored with old unauthenticated ciphertext, they will fail to decrypt. It is recommended to retrieve and decrypt all files before upgrading, and re-store them after upgrading to the authenticated version.
