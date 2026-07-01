@@ -45,7 +45,7 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	})
 	tr1.OnPeer = server1.OnPeer
 	server1.Transport = tr1
-	server1.Pex = NewPeerExchangeService(server1, server1.Logger)
+	server1.Pex = NewPeerExchangeService(server1, server1.PexInterval, server1.Logger)
 
 	// Start Node 2 (port 6000)
 	opts2 := FileServerOpts{
@@ -62,7 +62,7 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	})
 	tr2.OnPeer = server2.OnPeer
 	server2.Transport = tr2
-	server2.Pex = NewPeerExchangeService(server2, server2.Logger)
+	server2.Pex = NewPeerExchangeService(server2, server2.PexInterval, server2.Logger)
 
 	// Start servers
 	go server1.Start(context.Background())

@@ -17,13 +17,14 @@ type GarbageCollector struct {
 	store            *Store
 	nodeID           string
 	cleanupInterval  time.Duration
+	initialDelay     time.Duration
 	integrityEnabled bool
 	stopChan         chan struct{}
 	logger           *slog.Logger
 }
 
 // NewGarbageCollector creates a new garbage collector
-func NewGarbageCollector(store *Store, nodeID string, logger *slog.Logger) *GarbageCollector {
+func NewGarbageCollector(store *Store, nodeID string, gcInterval time.Duration, initialDelay time.Duration, logger *slog.Logger) *GarbageCollector {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -34,7 +35,8 @@ func NewGarbageCollector(store *Store, nodeID string, logger *slog.Logger) *Garb
 	return &GarbageCollector{
 		store:            store,
 		nodeID:           nodeID,
-		cleanupInterval:  1 * time.Hour, // Run cleanup every hour
+		cleanupInterval:  gcInterval,
+		initialDelay:     initialDelay,
 		integrityEnabled: true,
 		stopChan:         make(chan struct{}),
 		logger:           logger,
@@ -57,8 +59,8 @@ func (gc *GarbageCollector) run(ctx context.Context) {
 	ticker := time.NewTicker(gc.cleanupInterval)
 	defer ticker.Stop()
 
-	// Run initial cleanup after 5 minutes
-	initialDelay := time.NewTimer(5 * time.Minute)
+	// Run initial cleanup
+	initialDelay := time.NewTimer(gc.initialDelay)
 	defer initialDelay.Stop()
 
 	for {

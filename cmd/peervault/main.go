@@ -27,7 +27,16 @@ import (
 	"github.com/AdityaKrSingh26/PeerVault/pkg/p2p"
 )
 
-func makeServer(listenAddr string, networkKey []byte, slogLogger *slog.Logger, nodes ...string) *network.FileServer {
+func makeServer(
+	listenAddr string,
+	networkKey []byte,
+	slogLogger *slog.Logger,
+	fetchTimeout time.Duration,
+	pexInterval time.Duration,
+	gcInterval time.Duration,
+	gcDelay time.Duration,
+	nodes ...string,
+) *network.FileServer {
 	tcptransportOpts := p2p.TCPTransportOpts{
 		ListenAddr:    listenAddr,
 		HandshakeFunc: p2p.NOPHandshakeFunc,
@@ -50,6 +59,10 @@ func makeServer(listenAddr string, networkKey []byte, slogLogger *slog.Logger, n
 		Transport:         tcpTransport,
 		BootstrapNodes:    nodes,
 		Logger:            slogLogger,
+		FetchTimeout:      fetchTimeout,
+		PexInterval:       pexInterval,
+		GCInterval:        gcInterval,
+		GCDelay:           gcDelay,
 	}
 
 	s := network.NewFileServer(fileServerOpts)
@@ -449,6 +462,10 @@ func main() {
 		discoverPex    = flag.Bool("discover-pex", false, "Enable peer exchange (PEX) protocol")
 		quotaSize      = flag.String("quota", "", "Maximum storage quota (e.g., 5GB, 500MB) - configures automatically on first startup")
 		logLevel       = flag.String("log-level", "info", "log level: debug, info, warn, error")
+		fetchTimeout   = flag.Duration("fetch-timeout", 5*time.Second, "Fetch timeout for network files")
+		pexInterval    = flag.Duration("pex-interval", 5*time.Minute, "PEX peer list exchange interval")
+		gcInterval     = flag.Duration("gc-interval", 1*time.Hour, "Garbage collection execution interval")
+		gcDelay        = flag.Duration("gc-delay", 5*time.Minute, "Initial garbage collection execution delay")
 	)
 	flag.Parse()
 
@@ -524,7 +541,7 @@ func main() {
 	}
 
 	// Create and start server
-	server := makeServer(*listenAddr, networkKey, slogLogger, bootstrapNodes...)
+	server := makeServer(*listenAddr, networkKey, slogLogger, *fetchTimeout, *pexInterval, *gcInterval, *gcDelay, bootstrapNodes...)
 
 	// Determine override quota
 	var initialQuota int64

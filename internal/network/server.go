@@ -28,6 +28,10 @@ type FileServerOpts struct {
 	Transport         p2p.Transport
 	BootstrapNodes    []string
 	Logger            *slog.Logger
+	FetchTimeout      time.Duration
+	PexInterval       time.Duration
+	GCInterval        time.Duration
+	GCDelay           time.Duration
 }
 
 // StreamHeader represents the header of a file stream sent over the network.
@@ -62,6 +66,19 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 		opts.Logger = slog.Default()
 	}
 
+	if opts.FetchTimeout == 0 {
+		opts.FetchTimeout = 5 * time.Second
+	}
+	if opts.PexInterval == 0 {
+		opts.PexInterval = 5 * time.Minute
+	}
+	if opts.GCInterval == 0 {
+		opts.GCInterval = 1 * time.Hour
+	}
+	if opts.GCDelay == 0 {
+		opts.GCDelay = 5 * time.Minute
+	}
+
 	storeOpts := storage.StoreOpts{
 		Root:              opts.StorageRoot,
 		PathTransformFunc: opts.PathTransformFunc,
@@ -83,7 +100,7 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 
 	store := storage.NewStore(storeOpts)
 	quotaManager := quota.NewQuotaManager(opts.StorageRoot, opts.Logger)
-	gc := storage.NewGarbageCollector(store, opts.ID, opts.Logger)
+	gc := storage.NewGarbageCollector(store, opts.ID, opts.GCInterval, opts.GCDelay, opts.Logger)
 	metricsObj := metrics.NewMetrics()
 
 	server := &FileServer{
@@ -97,7 +114,7 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 		waiters:        make(map[string][]chan struct{}),
 	}
 
-	server.Pex = NewPeerExchangeService(server, opts.Logger)
+	server.Pex = NewPeerExchangeService(server, opts.PexInterval, opts.Logger)
 	return server
 }
 
@@ -188,7 +205,10 @@ func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 
 	s.Logger.Info("fetching file from network", "peer", s.Transport.Addr(), "key", key)
 
-	ch := s.registerFileWaiter(key)
+	ch, err := s.registerFileWaiter(key)
+	if err != nil {
+		return nil, err
+	}
 
 	// If not, broadcasts a MessageGetFile request to peers.
 	msg := Message{
@@ -207,7 +227,7 @@ func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 		// File was successfully received and written to disk
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(5 * time.Second):
+	case <-time.After(s.FetchTimeout):
 		return nil, fmt.Errorf("file %s not found on the network (timeout)", key)
 	}
 
@@ -272,14 +292,20 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 	return nil
 }
 
-func (s *FileServer) registerFileWaiter(key string) chan struct{} {
+const maxWaitersPerKey = 100
+
+func (s *FileServer) registerFileWaiter(key string) (chan struct{}, error) {
 	s.waitersMu.Lock()
 	defer s.waitersMu.Unlock()
 
-	ch := make(chan struct{}, 1)
 	hashedKey := crypto.HashKey(key)
+	if len(s.waiters[hashedKey]) >= maxWaitersPerKey {
+		return nil, fmt.Errorf("too many waiters for key %s", hashedKey)
+	}
+
+	ch := make(chan struct{}, 1)
 	s.waiters[hashedKey] = append(s.waiters[hashedKey], ch)
-	return ch
+	return ch, nil
 }
 
 func (s *FileServer) notifyFileWaiter(hashedKey string) {

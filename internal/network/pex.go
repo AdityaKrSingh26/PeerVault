@@ -36,7 +36,7 @@ type PeerExchangeService struct {
 }
 
 // NewPeerExchangeService creates a new PEX service
-func NewPeerExchangeService(server *FileServer, logger *slog.Logger) *PeerExchangeService {
+func NewPeerExchangeService(server *FileServer, pexInterval time.Duration, logger *slog.Logger) *PeerExchangeService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -44,7 +44,7 @@ func NewPeerExchangeService(server *FileServer, logger *slog.Logger) *PeerExchan
 		knownPeers:       make(map[string]*PeerInfo),
 		server:           server,
 		Enabled:          false,
-		exchangeInterval: 5 * time.Minute, // Exchange peer lists every 5 minutes
+		exchangeInterval: pexInterval,
 		stopCh:           make(chan struct{}),
 		logger:           logger,
 	}
@@ -93,19 +93,18 @@ func (pex *PeerExchangeService) AddKnownPeer(address string, source string) {
 
 // GetKnownPeers returns a list of known peers (excluding self and currently connected)
 func (pex *PeerExchangeService) GetKnownPeers() []PeerInfo {
-	pex.peerLock.RLock()
-	defer pex.peerLock.RUnlock()
-
-	peers := make([]PeerInfo, 0)
-
-	// Get list of currently connected peers
+	// Snapshot connected peers first with no PEX lock held
 	pex.server.PeerLock.Lock()
-	connectedPeers := make(map[string]bool)
+	connectedPeers := make(map[string]bool, len(pex.server.Peers))
 	for addr := range pex.server.Peers {
 		connectedPeers[addr] = true
 	}
 	pex.server.PeerLock.Unlock()
 
+	pex.peerLock.RLock()
+	defer pex.peerLock.RUnlock()
+
+	peers := make([]PeerInfo, 0)
 	// Only include peers we're not currently connected to
 	for addr, peer := range pex.knownPeers {
 		if !connectedPeers[addr] {
