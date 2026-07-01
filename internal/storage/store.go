@@ -103,12 +103,44 @@ func NewStore(opts StoreOpts) *Store {
 	return s
 }
 
+func ValidateNodeID(id string) error {
+	if id == "" {
+		return errors.New("nodeID cannot be empty")
+	}
+	if strings.ContainsAny(id, "/\\.") {
+		return fmt.Errorf("nodeID contains invalid characters: %q", id)
+	}
+	// Must be hex string (SHA-256 IDs are hex)
+	if _, err := hex.DecodeString(id); err != nil {
+		return fmt.Errorf("nodeID must be hex: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) resolvePath(id string, subpath string) (string, error) {
+	if err := ValidateNodeID(id); err != nil {
+		return "", err
+	}
+	cleanRoot := filepath.Clean(s.Root)
+	resolved := filepath.Join(cleanRoot, id, subpath)
+
+	// Ensure resolved path is under cleanRoot
+	prefix := cleanRoot + string(os.PathSeparator)
+	if !strings.HasPrefix(resolved, prefix) && resolved != cleanRoot {
+		return "", fmt.Errorf("path escape detected: %s", resolved)
+	}
+	return resolved, nil
+}
+
 // checks if a file exists in the store
 func (s *Store) Has(id string, key string) bool {
 	pathKey := s.PathTransformFunc(key)
-	fullPathWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.FullPath())
+	fullPathWithRoot, err := s.resolvePath(id, pathKey.FullPath())
+	if err != nil {
+		return false
+	}
 
-	_, err := os.Stat(fullPathWithRoot)
+	_, err = os.Stat(fullPathWithRoot)
 	return !errors.Is(err, os.ErrNotExist)
 }
 
@@ -125,7 +157,10 @@ func (s *Store) Delete(id string, key string) error {
 		log.Printf("deleted [%s] from disk", pathKey.Filename)
 	}()
 
-	firstPathNameWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.FirstPathName())
+	firstPathNameWithRoot, err := s.resolvePath(id, pathKey.FirstPathName())
+	if err != nil {
+		return err
+	}
 
 	return os.RemoveAll(firstPathNameWithRoot)
 }
@@ -181,13 +216,19 @@ func (s *Store) WriteEncrypt(encKey []byte, id string, key string, r io.Reader) 
 // openFileForWriting ensures the necessary directories exist and opens the file
 func (s *Store) openFileForWriting(id string, key string) (*os.File, error) {
 	pathKey := s.PathTransformFunc(key)
-	pathNameWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.PathName)
+	pathNameWithRoot, err := s.resolvePath(id, pathKey.PathName)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := os.MkdirAll(pathNameWithRoot, os.ModePerm); err != nil {
 		return nil, err
 	}
 
-	fullPathWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.FullPath())
+	fullPathWithRoot, err := s.resolvePath(id, pathKey.FullPath())
+	if err != nil {
+		return nil, err
+	}
 
 	return os.Create(fullPathWithRoot)
 }
@@ -210,7 +251,10 @@ func (s *Store) Read(id string, key string) (int64, io.Reader, error) {
 // readStream opens a file and returns its reader
 func (s *Store) readStream(id string, key string) (int64, io.ReadCloser, error) {
 	pathKey := s.PathTransformFunc(key)
-	fullPathWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.FullPath())
+	fullPathWithRoot, err := s.resolvePath(id, pathKey.FullPath())
+	if err != nil {
+		return 0, nil, err
+	}
 
 	file, err := os.Open(fullPathWithRoot)
 	if err != nil {
@@ -238,7 +282,10 @@ type FileInfo struct {
 func (s *Store) List(id string) ([]FileInfo, error) {
 	var files []FileInfo
 
-	nodeDir := fmt.Sprintf("%s/%s", s.Root, id)
+	nodeDir, err := s.resolvePath(id, "")
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if node directory exists
 	if _, err := os.Stat(nodeDir); os.IsNotExist(err) {
@@ -246,7 +293,7 @@ func (s *Store) List(id string) ([]FileInfo, error) {
 	}
 
 	// Walk through all files in the node's directory
-	err := filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

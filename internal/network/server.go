@@ -68,6 +68,10 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 		opts.ID = id
 	}
 
+	if err := storage.ValidateNodeID(opts.ID); err != nil {
+		log.Fatalf("invalid node ID %q: %v", opts.ID, err)
+	}
+
 	store := storage.NewStore(storeOpts)
 	quotaManager := quota.NewQuotaManager(opts.StorageRoot)
 	gc := storage.NewGarbageCollector(store, opts.ID)

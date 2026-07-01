@@ -24,12 +24,16 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	defer os.RemoveAll(root2)
 
 	encKey, _ := crypto.NewEncryptionKey()
+	id1, err := crypto.GenerateID()
+	assert.Nil(t, err)
+	id2, err := crypto.GenerateID()
+	assert.Nil(t, err)
 
 	// Start Node 1 (port 5000)
 	opts1 := FileServerOpts{
 		StorageRoot:       root1,
 		PathTransformFunc: storage.CASPathTransformFunc,
-		ID:                "node-1",
+		ID:                id1,
 		EncKey:            encKey,
 	}
 	server1 := NewFileServer(opts1)
@@ -46,7 +50,7 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	opts2 := FileServerOpts{
 		StorageRoot:       root2,
 		PathTransformFunc: storage.CASPathTransformFunc,
-		ID:                "node-2",
+		ID:                id2,
 		EncKey:            encKey,
 	}
 	server2 := NewFileServer(opts2)
@@ -69,7 +73,7 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	defer server2.Stop()
 
 	// Connect Node 2 to Node 1
-	err := server2.Transport.Dial("127.0.0.1:5000")
+	err = server2.Transport.Dial("127.0.0.1:5000")
 	assert.Nil(t, err)
 
 	// Connect Node 1 to Node 2 (make connection bi-directional)

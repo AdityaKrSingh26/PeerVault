@@ -69,13 +69,17 @@ PeerVault is ideal for scenarios requiring distributed, fault-tolerant storage:
 # 1. Build
 make build
 
-# 2. Start first node
+# 2. Generate a secure key (64 hex characters, which represents a 32-byte key)
+export PEERVAULT_KEY=$(openssl rand -hex 32)
+
+# 3. Start first node
 ./bin/peervault -addr :3000 -metrics :9090 -discover-local -interactive
 
-# 3. Start second node (in another terminal)
+# 4. Start second node (in another terminal, using the same key)
+export PEERVAULT_KEY="use-the-same-hex-key-generated-above"
 ./bin/peervault -addr :4000 -bootstrap localhost:3000 -discover-local -interactive
 
-# 4. Store and retrieve files
+# 5. Store and retrieve files
 PeerVault> store myfile.txt
 PeerVault> list
 PeerVault> get myfile.txt
@@ -114,7 +118,7 @@ export PEERVAULT_QUOTA='5GB'
 | `-advertise`          | Address to advertise to peers   | Auto-detected      |
 | `-bootstrap`          | Comma-separated bootstrap nodes | None               |
 | `-public-ip`          | Auto-detect public IP           | `false`            |
-| `-key`                | Encryption key (32 bytes)       | Default (insecure) |
+| `-key`                | Encryption key (32 raw bytes or 64 hex characters) | **Required** |
 | `-quota`              | Maximum storage quota (e.g. 5GB)| None               |
 | `-interactive`        | Enable interactive mode         | `false`            |
 | `-verbose` / `-debug` | Enable debug logging            | `false`            |
@@ -421,7 +425,12 @@ make test-multinode
 ## Performance
 
 - **Memory Usage**: Constant ~32KB per transfer (streaming)
-- **Encryption**: AES-256-CTR mode
+- **Encryption**: AES-256-CTR mode with HMAC-SHA256 authentication
 - **Hash Algorithm**: SHA-256
 - **GC Interval**: Every 1 hour
 - **PEX Interval**: Every 5 minutes
+
+## Migration Warning (Breaking Change)
+
+> [!WARNING]
+> The encryption layer has been upgraded to support authenticated encryption (using HMAC-SHA256 under an encrypt-then-MAC paradigm). Ciphertext formats are now incompatible with versions prior to this upgrade. If you have files stored with old unauthenticated ciphertext, they will fail to decrypt. It is recommended to retrieve and decrypt all files before upgrading, and re-store them after upgrading to the authenticated version.

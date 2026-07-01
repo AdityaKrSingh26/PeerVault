@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/gob"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -458,28 +459,32 @@ func main() {
 		log.Println("🐛 Debug mode enabled")
 	}
 
-	// Get encryption key from flag, env var, or generate random key
+	// Get encryption key from flag or env var
 	var networkKey []byte
+	var keySource string
 	if *encKey != "" {
-		// Use key from command line flag
-		networkKey = []byte(*encKey)
+		keySource = *encKey
 	} else if envKey := os.Getenv("PEERVAULT_KEY"); envKey != "" {
-		// Use key from environment variable
-		networkKey = []byte(envKey)
+		keySource = envKey
 	} else {
-		// SECURITY WARNING: No key provided, using default (NOT SECURE FOR PRODUCTION)
-		log.Println("⚠️  WARNING: No encryption key provided via -key flag or PEERVAULT_KEY env var")
-		log.Println("⚠️  Using default key. For production, set a secure key with:")
-		log.Println("   export PEERVAULT_KEY='your-32-byte-secure-key-here'")
-		networkKey = []byte("PeerVault-Network-Key-256bit!") // 32 bytes for AES-256
+		log.Fatal("-key is required. Generate one with: openssl rand -hex 32")
+	}
+
+	// If key is 64 characters of hex, decode it to 32 bytes
+	if len(keySource) == 64 {
+		decoded, err := hex.DecodeString(keySource)
+		if err == nil {
+			networkKey = decoded
+		} else {
+			networkKey = []byte(keySource)
+		}
+	} else {
+		networkKey = []byte(keySource)
 	}
 
 	// Ensure key is exactly 32 bytes for AES-256
 	if len(networkKey) != 32 {
-		key := make([]byte, 32)
-		copy(key, networkKey)
-		networkKey = key
-		log.Printf("⚠️  Encryption key adjusted to 32 bytes (was %d bytes)", len(networkKey))
+		log.Fatalf("-key must be exactly 32 bytes, got %d. Generate one with: openssl rand -hex 32", len(networkKey))
 	}
 
 	// Parse bootstrap nodes

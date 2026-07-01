@@ -22,6 +22,9 @@ type GarbageCollector struct {
 
 // NewGarbageCollector creates a new garbage collector
 func NewGarbageCollector(store *Store, nodeID string) *GarbageCollector {
+	if err := ValidateNodeID(nodeID); err != nil {
+		log.Fatalf("invalid node ID %q for garbage collector: %v", nodeID, err)
+	}
 	return &GarbageCollector{
 		store:            store,
 		nodeID:           nodeID,
@@ -102,12 +105,15 @@ type CleanupStats struct {
 func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
 	log.Println("Verifying file integrity...")
 
-	nodeDir := fmt.Sprintf("%s/%s", gc.store.Root, gc.nodeID)
+	nodeDir, err := gc.store.resolvePath(gc.nodeID, "")
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(nodeDir); os.IsNotExist(err) {
 		return nil // No files to check
 	}
 
-	err := filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip errors
 		}
@@ -157,13 +163,16 @@ func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
 func (gc *GarbageCollector) cleanOrphanedFiles(stats *CleanupStats) error {
 	log.Println("Cleaning orphaned files...")
 
-	nodeDir := fmt.Sprintf("%s/%s", gc.store.Root, gc.nodeID)
+	nodeDir, err := gc.store.resolvePath(gc.nodeID, "")
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(nodeDir); os.IsNotExist(err) {
 		return nil
 	}
 
 	// Find and remove empty directories
-	err := filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -211,7 +220,10 @@ func calculateFileHash(filePath string) (string, error) {
 // VerifyFile checks if a specific file has valid integrity
 func (gc *GarbageCollector) VerifyFile(key string) (bool, error) {
 	pathKey := gc.store.PathTransformFunc(key)
-	fullPath := fmt.Sprintf("%s/%s/%s", gc.store.Root, gc.nodeID, pathKey.FullPath())
+	fullPath, err := gc.store.resolvePath(gc.nodeID, pathKey.FullPath())
+	if err != nil {
+		return false, err
+	}
 
 	// Check if file exists
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {

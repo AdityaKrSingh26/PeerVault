@@ -1,11 +1,14 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 )
 
@@ -59,6 +62,13 @@ func copyStream(stream cipher.Stream, blockSize int, src io.Reader, dst io.Write
 	return nw, nil
 }
 
+func hmacKey(key []byte) []byte {
+	h := sha256.New()
+	h.Write(key)
+	h.Write([]byte("peervault-hmac-v1"))
+	return h.Sum(nil)
+}
+
 // CopyDecrypt decrypts data from src and writes the decrypted data to dst
 // Used to decrypt data that was encrypted using CopyEncrypt
 func CopyDecrypt(key []byte, src io.Reader, dst io.Writer) (int, error) {
@@ -67,16 +77,45 @@ func CopyDecrypt(key []byte, src io.Reader, dst io.Writer) (int, error) {
 		return 0, err
 	}
 
-	iv := make([]byte, block.BlockSize())
-	if _, err := src.Read(iv); err != nil {
+	// 1. Read expected HMAC (32 bytes)
+	expectedMac := make([]byte, 32)
+	if _, err := io.ReadFull(src, expectedMac); err != nil {
 		return 0, err
 	}
 
-	// CTR (Counter Mode) is an encryption mode that turns a block cipher into a stream cipher
-	stream := cipher.NewCTR(block, iv)
+	// 2. Read IV (16 bytes)
+	iv := make([]byte, block.BlockSize())
+	if _, err := io.ReadFull(src, iv); err != nil {
+		return 0, err
+	}
 
-	// Pass 0 for blockSize since we already read the IV and don't want to count it
-	return copyStream(stream, 0, src, dst)
+	// 3. Read the rest as ciphertext
+	ciphertext, err := io.ReadAll(src)
+	if err != nil {
+		return 0, err
+	}
+
+	// 4. Recompute HMAC over [IV + ciphertext]
+	h := hmac.New(sha256.New, hmacKey(key))
+	h.Write(iv)
+	h.Write(ciphertext)
+	computedMac := h.Sum(nil)
+
+	// 5. Compare HMACs in constant time
+	if !hmac.Equal(expectedMac, computedMac) {
+		return 0, errors.New("HMAC verification failed: ciphertext is corrupted or wrong key used")
+	}
+
+	// 6. Decrypt the ciphertext and write to dst
+	stream := cipher.NewCTR(block, iv)
+	stream.XORKeyStream(ciphertext, ciphertext)
+
+	n, err := dst.Write(ciphertext)
+	if err != nil {
+		return 0, err
+	}
+
+	return n, nil
 }
 
 // CopyEncrypt encrypts data for secure storage or transmission
@@ -91,12 +130,34 @@ func CopyEncrypt(key []byte, src io.Reader, dst io.Writer) (int, error) {
 		return 0, err
 	}
 
-	// prepend the IV to the file.
-	if _, err := dst.Write(iv); err != nil {
+	// Encrypt to a temp buffer first so we can compute the HMAC over [IV + ciphertext]
+	var ciphertextBuf bytes.Buffer
+	stream := cipher.NewCTR(block, iv)
+
+	// XORKeyStream to ciphertextBuf
+	_, err = copyStream(stream, 0, src, &ciphertextBuf)
+	if err != nil {
 		return 0, err
 	}
 
-	stream := cipher.NewCTR(block, iv)
+	ciphertext := ciphertextBuf.Bytes()
 
-	return copyStream(stream, block.BlockSize(), src, dst)
+	// Compute HMAC-SHA256 over [IV + ciphertext]
+	h := hmac.New(sha256.New, hmacKey(key))
+	h.Write(iv)
+	h.Write(ciphertext)
+	mac := h.Sum(nil) // 32 bytes
+
+	// Write HMAC (32 bytes) || IV (16 bytes) || ciphertext to dst
+	if _, err := dst.Write(mac); err != nil {
+		return 0, err
+	}
+	if _, err := dst.Write(iv); err != nil {
+		return 0, err
+	}
+	if _, err := dst.Write(ciphertext); err != nil {
+		return 0, err
+	}
+
+	return len(mac) + len(iv) + len(ciphertext), nil
 }
