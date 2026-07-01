@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -91,10 +92,15 @@ func NewStore(opts StoreOpts) *Store {
 		opts.Root = defaultRootFolderName
 	}
 
-	return &Store{
+	s := &Store{
 		StoreOpts: opts,
 		keyMap:    make(map[string]string),
 	}
+
+	// Load keys if they exist on disk
+	_ = s.loadKeyMap()
+
+	return s
 }
 
 // checks if a file exists in the store
@@ -132,6 +138,8 @@ func (s *Store) Write(id string, key string, r io.Reader) (int64, error) {
 	s.keyMap[pathKey.Filename] = key
 	s.keyMapMu.Unlock()
 
+	_ = s.saveKeyMap()
+
 	return s.writeStream(id, key, r)
 }
 
@@ -141,8 +149,31 @@ func (s *Store) WriteDecrypt(encKey []byte, id string, key string, r io.Reader) 
 	if err != nil {
 		return 0, err
 	}
+	defer f.Close()
 
 	n, err := crypto.CopyDecrypt(encKey, r, f)
+
+	return int64(n), err
+}
+
+// writes encrypted data to a file (encrypting on-the-fly)
+func (s *Store) WriteEncrypt(encKey []byte, id string, key string, r io.Reader) (int64, error) {
+	// Store the key mapping
+	pathKey := s.PathTransformFunc(key)
+
+	s.keyMapMu.Lock()
+	s.keyMap[pathKey.Filename] = key
+	s.keyMapMu.Unlock()
+
+	_ = s.saveKeyMap()
+
+	f, err := s.openFileForWriting(id, key)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	n, err := crypto.CopyEncrypt(encKey, r, f)
 
 	return int64(n), err
 }
@@ -167,6 +198,7 @@ func (s *Store) writeStream(id string, key string, r io.Reader) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer f.Close()
 
 	return io.Copy(f, r)
 }
@@ -285,6 +317,41 @@ func (s *Store) ListAll() (map[string][]FileInfo, error) {
 // ClearKeyMap safely clears the key mapping
 func (s *Store) ClearKeyMap() {
 	s.keyMapMu.Lock()
-	defer s.keyMapMu.Unlock()
 	s.keyMap = make(map[string]string)
+	s.keyMapMu.Unlock()
+
+	_ = s.saveKeyMap()
+}
+
+func (s *Store) saveKeyMap() error {
+	s.keyMapMu.RLock()
+	defer s.keyMapMu.RUnlock()
+
+	metadataPath := filepath.Join(s.Root, "metadata.json")
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(s.keyMap, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(metadataPath, data, 0644)
+}
+
+func (s *Store) loadKeyMap() error {
+	metadataPath := filepath.Join(s.Root, "metadata.json")
+	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return err
+	}
+
+	s.keyMapMu.Lock()
+	defer s.keyMapMu.Unlock()
+	return json.Unmarshal(data, &s.keyMap)
 }

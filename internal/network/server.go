@@ -108,6 +108,23 @@ type MessageGetFile struct {
 	Key string
 }
 
+// decryptOnTheFly decrypts an encrypted reader stream on-the-fly using io.Pipe
+func (s *FileServer) decryptOnTheFly(r io.Reader) io.Reader {
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := crypto.CopyDecrypt(s.EncKey, r, pw)
+		if err != nil {
+			pw.CloseWithError(err)
+		} else {
+			pw.Close()
+		}
+		if rc, ok := r.(io.Closer); ok {
+			rc.Close()
+		}
+	}()
+	return pr
+}
+
 // Retrieves a file from the local store or fetches it from the network.
 func (s *FileServer) Get(key string) (io.Reader, error) {
 
@@ -115,7 +132,10 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 	if s.store.Has(s.ID, key) {
 		fmt.Printf("[%s] serving file (%s) from local disk\n", s.Transport.Addr(), key)
 		_, r, err := s.store.Read(s.ID, key)
-		return r, err
+		if err != nil {
+			return nil, err
+		}
+		return s.decryptOnTheFly(r), nil
 	}
 
 	fmt.Printf("[%s] dont have file (%s) locally, fetching from network...\n", s.Transport.Addr(), key)
@@ -141,7 +161,7 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		binary.Read(peer, binary.LittleEndian, &fileSize)
 
 		// storing the file locally
-		n, err := s.store.WriteDecrypt(s.EncKey, s.ID, key, io.LimitReader(peer, fileSize))
+		n, err := s.store.Write(s.ID, key, io.LimitReader(peer, fileSize))
 		if err != nil {
 			return nil, err
 		}
@@ -152,17 +172,16 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 	}
 
 	_, r, err := s.store.Read(s.ID, key)
-	return r, err
+	if err != nil {
+		return nil, err
+	}
+	return s.decryptOnTheFly(r), nil
 }
 
 // Stores a file locally and notifies peers.
 func (s *FileServer) Store(key string, r io.Reader) error {
-	var (
-		fileBuffer = new(bytes.Buffer)
-		tee        = io.TeeReader(r, fileBuffer)
-	)
-
-	size, err := s.store.Write(s.ID, key, tee)
+	// Store encrypted locally (streaming / constant memory)
+	size, err := s.store.WriteEncrypt(s.EncKey, s.ID, key, r)
 	if err != nil {
 		return err
 	}
@@ -171,7 +190,7 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		Payload: MessageStoreFile{
 			ID:   s.ID,
 			Key:  crypto.HashKey(key),
-			Size: size + 16,
+			Size: size, // size of encrypted file on disk
 		},
 	}
 
@@ -187,7 +206,17 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	}
 	mw := io.MultiWriter(peers...)
 	mw.Write([]byte{p2p.IncomingStream})
-	n, err := crypto.CopyEncrypt(s.EncKey, fileBuffer, mw)
+
+	// Open the local encrypted file and stream it directly to peers
+	_, fileReader, err := s.store.Read(s.ID, key)
+	if err != nil {
+		return err
+	}
+	if rc, ok := fileReader.(io.Closer); ok {
+		defer rc.Close()
+	}
+
+	n, err := io.Copy(mw, fileReader)
 	if err != nil {
 		return err
 	}
