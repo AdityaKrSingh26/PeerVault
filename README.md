@@ -105,9 +105,6 @@ cd PeerVault
 make build
 ```
 
-> [!WARNING]
-> The encryption layer has been upgraded to support authenticated encryption (using HMAC-SHA256 under an encrypt-then-MAC paradigm). Ciphertext formats are now incompatible with versions prior to this upgrade. If you have files stored with old unauthenticated ciphertext, they will fail to decrypt. It is recommended to retrieve and decrypt all files before upgrading, and re-store them after upgrading to the authenticated version.
-
 ## Configuration
 
 PeerVault supports flexible configuration with options resolvable in the following order of precedence (highest first):
