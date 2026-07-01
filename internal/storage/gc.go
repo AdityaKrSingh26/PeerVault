@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -35,9 +36,9 @@ func NewGarbageCollector(store *Store, nodeID string) *GarbageCollector {
 }
 
 // Start begins the periodic garbage collection routine
-func (gc *GarbageCollector) Start() {
+func (gc *GarbageCollector) Start(ctx context.Context) {
 	log.Println("Starting garbage collector...")
-	go gc.run()
+	go gc.run(ctx)
 }
 
 // Stop stops the garbage collection routine
@@ -46,12 +47,13 @@ func (gc *GarbageCollector) Stop() {
 }
 
 // run is the main garbage collection loop
-func (gc *GarbageCollector) run() {
+func (gc *GarbageCollector) run(ctx context.Context) {
 	ticker := time.NewTicker(gc.cleanupInterval)
 	defer ticker.Stop()
 
 	// Run initial cleanup after 5 minutes
 	initialDelay := time.NewTimer(5 * time.Minute)
+	defer initialDelay.Stop()
 
 	for {
 		select {
@@ -59,6 +61,9 @@ func (gc *GarbageCollector) run() {
 			gc.performCleanup()
 		case <-ticker.C:
 			gc.performCleanup()
+		case <-ctx.Done():
+			log.Println("Garbage collector stopped due to context cancellation")
+			return
 		case <-gc.stopChan:
 			log.Println("Garbage collector stopped")
 			return

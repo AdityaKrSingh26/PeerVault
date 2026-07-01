@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/gob"
 	"encoding/hex"
 	"flag"
@@ -11,7 +12,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/AdityaKrSingh26/PeerVault/internal/crypto"
@@ -54,7 +58,7 @@ func makeServer(listenAddr string, networkKey []byte, nodes ...string) *network.
 }
 
 // Interactive mode for file operations
-func interactiveMode(server *network.FileServer) {
+func interactiveMode(ctx context.Context, server *network.FileServer) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("\n=== PeerVault Interactive Mode ===")
@@ -97,7 +101,7 @@ func interactiveMode(server *network.FileServer) {
 			filename := parts[1]
 			// For demo, store some sample data
 			data := bytes.NewReader([]byte(fmt.Sprintf("Sample data for file: %s (stored at %s)", filename, time.Now().Format("15:04:05"))))
-			err := server.Store(filename, data)
+			err := server.Store(ctx, filename, data)
 			if err != nil {
 				fmt.Printf("Error storing file: %v\n", err)
 			} else {
@@ -110,7 +114,7 @@ func interactiveMode(server *network.FileServer) {
 				continue
 			}
 			filename := parts[1]
-			reader, err := server.Get(filename)
+			reader, err := server.Get(ctx, filename)
 			if err != nil {
 				fmt.Printf("Error retrieving file: %v\n", err)
 			} else {
@@ -367,7 +371,7 @@ func interactiveMode(server *network.FileServer) {
 			fmt.Printf("Fetching '%s' from %s...\n", filename, peerAddr)
 
 			// Use the existing Get method which will fetch from network
-			reader, err := server.Get(filename)
+			reader, err := server.Get(ctx, filename)
 			if err != nil {
 				fmt.Printf("Error fetching file: %v\n", err)
 				continue
@@ -570,24 +574,28 @@ func main() {
 	}
 	log.Printf("Storage quota configured: %s", metrics.FormatBytes(server.QuotaManager.GetMaxStorage()))
 
+	// Set up OS signal handling context
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// Enable peer discovery if requested
 	if *discoverLocal {
 		log.Println("Enabling local network discovery (mDNS)...")
-		if err := server.EnableLocalDiscovery(finalAdvertiseAddr); err != nil {
+		if err := server.EnableLocalDiscovery(ctx, finalAdvertiseAddr); err != nil {
 			log.Printf("Warning: Failed to enable local discovery: %v", err)
 		}
 	}
 
 	if *discoverPex {
 		log.Println("Enabling peer exchange (PEX)...")
-		server.EnablePeerExchange()
+		server.EnablePeerExchange(ctx)
 	}
 
 	// Start metrics server if enabled
+	var metricsServer *metrics.MetricsServer
 	if *metricsAddr != "" {
-		metricsServer := metrics.NewMetricsServer(*metricsAddr, server.Metrics)
+		metricsServer = metrics.NewMetricsServer(*metricsAddr, server.Metrics)
 		go func() {
-			log.Printf("Starting metrics server on %s", *metricsAddr)
 			if err := metricsServer.Start(); err != nil && err != http.ErrServerClosed {
 				log.Printf("Metrics server error: %v", err)
 			}
@@ -595,7 +603,10 @@ func main() {
 	}
 
 	// Start server in background
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		log.Printf("Starting PeerVault server")
 		log.Printf("  Listen address: %s", *listenAddr)
 		log.Printf("  Advertise address: %s", finalAdvertiseAddr)
@@ -604,53 +615,84 @@ func main() {
 			log.Printf("  Bootstrap nodes: %v", bootstrapNodes)
 		}
 
-		if err := server.Start(); err != nil {
-			log.Fatal("Server failed to start:", err)
+		if err := server.Start(ctx); err != nil && err != context.Canceled {
+			log.Printf("Server stopped with error: %v", err)
 		}
 	}()
 
 	// Give server time to start
-	time.Sleep(2 * time.Second)
-
-	if *interactive {
-		// Interactive mode
-		interactiveMode(server)
-	} else if *demo {
-		// Demo mode - store and retrieve some test files
-		fmt.Println("Running demo mode...")
-
-		for i := 0; i < 5; i++ {
-			key := fmt.Sprintf("demo_file_%d.txt", i)
-			data := bytes.NewReader([]byte(fmt.Sprintf("Demo file %d content created at %s", i, time.Now().Format("15:04:05"))))
-
-			if err := server.Store(key, data); err != nil {
-				log.Printf("Error storing %s: %v", key, err)
-			} else {
-				log.Printf("Stored: %s", key)
-			}
-		}
-
-		time.Sleep(2 * time.Second)
-
-		// Try to retrieve files
-		for i := 0; i < 5; i++ {
-			key := fmt.Sprintf("demo_file_%d.txt", i)
-			reader, err := server.Get(key)
-			if err != nil {
-				log.Printf("Error retrieving %s: %v", key, err)
-			} else {
-				data, _ := io.ReadAll(reader)
-				log.Printf("Retrieved %s: %s", key, string(data))
-			}
-		}
-	} else {
-		// Keep server running
-		fmt.Printf("PeerVault server running on %s\n", *listenAddr)
-		fmt.Printf("Local IP: %s\n", network.GetLocalIP())
-		fmt.Printf("Use Ctrl+C to stop or --interactive flag for interactive mode\n")
-
-		select {} // Block forever
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
 	}
+
+	if ctx.Err() == nil {
+		if *interactive {
+			// Interactive mode
+			interactiveMode(ctx, server)
+			stop() // Signal loop cancellation on exit
+		} else if *demo {
+			// Demo mode - store and retrieve some test files
+			fmt.Println("Running demo mode...")
+
+			for i := 0; i < 5; i++ {
+				if ctx.Err() != nil {
+					break
+				}
+				key := fmt.Sprintf("demo_file_%d.txt", i)
+				data := bytes.NewReader([]byte(fmt.Sprintf("Demo file %d content created at %s", i, time.Now().Format("15:04:05"))))
+
+				if err := server.Store(ctx, key, data); err != nil {
+					log.Printf("Error storing %s: %v", key, err)
+				} else {
+					log.Printf("Stored: %s", key)
+				}
+			}
+
+			select {
+			case <-time.After(2 * time.Second):
+			case <-ctx.Done():
+			}
+
+			// Try to retrieve files
+			for i := 0; i < 5; i++ {
+				if ctx.Err() != nil {
+					break
+				}
+				key := fmt.Sprintf("demo_file_%d.txt", i)
+				reader, err := server.Get(ctx, key)
+				if err != nil {
+					log.Printf("Error retrieving %s: %v", key, err)
+				} else {
+					data, _ := io.ReadAll(reader)
+					log.Printf("Retrieved %s: %s", key, string(data))
+				}
+			}
+			stop() // Signal loop cancellation on exit
+		} else {
+			// Keep server running
+			fmt.Printf("PeerVault server running on %s\n", *listenAddr)
+			fmt.Printf("Local IP: %s\n", network.GetLocalIP())
+			fmt.Printf("Use Ctrl+C to stop or --interactive flag for interactive mode\n")
+
+			<-ctx.Done()
+		}
+	}
+
+	log.Println("Shutting down PeerVault server...")
+	server.Stop()
+	if metricsServer != nil {
+		metricsServer.Stop()
+	}
+	if server.Discovery != nil {
+		server.Discovery.Stop()
+	}
+	if server.Pex != nil {
+		server.Pex.Stop()
+	}
+
+	wg.Wait()
+	log.Println("PeerVault server cleanly shut down.")
 }
 
 func isTerminal(f *os.File) bool {

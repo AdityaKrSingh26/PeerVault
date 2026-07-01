@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -64,9 +65,9 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	server2.Pex = NewPeerExchangeService(server2)
 
 	// Start servers
-	go server1.Start()
+	go server1.Start(context.Background())
 	time.Sleep(100 * time.Millisecond)
-	go server2.Start()
+	go server2.Start(context.Background())
 	time.Sleep(100 * time.Millisecond)
 
 	defer server1.Stop()
@@ -86,14 +87,14 @@ func TestE2EReplicationAndRetrieval(t *testing.T) {
 	// Store file on Node 1
 	fileKey := "secret_doc.txt"
 	fileContent := []byte("PeerVault E2E test file content - Top Secret!")
-	err = server1.Store(fileKey, bytes.NewReader(fileContent))
+	err = server1.Store(context.Background(), fileKey, bytes.NewReader(fileContent))
 	assert.Nil(t, err)
 
 	// Give time to replicate to Node 2
 	time.Sleep(200 * time.Millisecond)
 
 	// Retrieve file from Node 2 (since Node 2 is a peer, it should already have it replicated)
-	reader, err := server2.Get(fileKey)
+	reader, err := server2.Get(context.Background(), fileKey)
 	assert.Nil(t, err)
 
 	retrievedContent, err := io.ReadAll(reader)

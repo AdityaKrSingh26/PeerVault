@@ -56,14 +56,14 @@ func NewDiscoveryService(serviceName string, port int, advertiseAddr string) *Di
 }
 
 // Start begins advertising and discovering peers via mDNS
-func (ds *DiscoveryService) Start() error {
+func (ds *DiscoveryService) Start(ctx context.Context) error {
 	// Start advertising this node
 	if err := ds.startAdvertising(); err != nil {
 		return fmt.Errorf("failed to start mDNS advertising: %w", err)
 	}
 
 	// Start discovering other nodes
-	go ds.startDiscovery()
+	go ds.startDiscovery(ctx)
 
 	log.Printf("mDNS discovery started: advertising as %s on port %d", ds.serviceName, ds.port)
 	return nil
@@ -123,9 +123,9 @@ func (ds *DiscoveryService) startAdvertising() error {
 }
 
 // startDiscovery continuously discovers peers on the local network
-func (ds *DiscoveryService) startDiscovery() {
+func (ds *DiscoveryService) startDiscovery(ctx context.Context) {
 	// Initial discovery
-	ds.discoverPeers()
+	ds.discoverPeers(ctx)
 
 	// Periodic rediscovery every 30 seconds
 	ticker := time.NewTicker(30 * time.Second)
@@ -134,7 +134,9 @@ func (ds *DiscoveryService) startDiscovery() {
 	for {
 		select {
 		case <-ticker.C:
-			ds.discoverPeers()
+			ds.discoverPeers(ctx)
+		case <-ctx.Done():
+			return
 		case <-ds.stopCh:
 			return
 		}
@@ -142,7 +144,7 @@ func (ds *DiscoveryService) startDiscovery() {
 }
 
 // discoverPeers performs a single discovery scan
-func (ds *DiscoveryService) discoverPeers() {
+func (ds *DiscoveryService) discoverPeers(ctx context.Context) {
 	// Create entries channel
 	entriesCh := make(chan *mdns.ServiceEntry, 10)
 
@@ -166,12 +168,15 @@ func (ds *DiscoveryService) discoverPeers() {
 
 	// Process discovered entries
 	for entry := range entriesCh {
-		ds.handleDiscoveredPeer(entry)
+		if ctx.Err() != nil {
+			return
+		}
+		ds.handleDiscoveredPeer(ctx, entry)
 	}
 }
 
 // handleDiscoveredPeer processes a discovered peer
-func (ds *DiscoveryService) handleDiscoveredPeer(entry *mdns.ServiceEntry) {
+func (ds *DiscoveryService) handleDiscoveredPeer(ctx context.Context, entry *mdns.ServiceEntry) {
 	// Skip if it's our own service
 	if entry.Port == ds.port {
 		// Additional check: compare IPs
@@ -211,6 +216,9 @@ func (ds *DiscoveryService) handleDiscoveredPeer(entry *mdns.ServiceEntry) {
 	// Notify callback
 	if ds.onPeerFound != nil {
 		go func() {
+			if ctx.Err() != nil {
+				return
+			}
 			if err := ds.onPeerFound(peerAddr); err != nil {
 				DebugLog("Failed to connect to discovered peer %s: %v", peerAddr, err)
 			} else {

@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"fmt"
 	"log"
@@ -45,15 +46,15 @@ func NewPeerExchangeService(server *FileServer) *PeerExchangeService {
 }
 
 // Start enables peer exchange
-func (pex *PeerExchangeService) Start() {
+func (pex *PeerExchangeService) Start(ctx context.Context) {
 	pex.Enabled = true
 	log.Println("Peer exchange (PEX) enabled")
 
 	// Start periodic peer list exchange
-	go pex.periodicExchange()
+	go pex.periodicExchange(ctx)
 
 	// Start cleanup of old peers
-	go pex.periodicCleanup()
+	go pex.periodicCleanup(ctx)
 }
 
 // Stop disables peer exchange
@@ -111,18 +112,26 @@ func (pex *PeerExchangeService) GetKnownPeers() []PeerInfo {
 }
 
 // periodicExchange periodically exchanges peer lists with connected peers
-func (pex *PeerExchangeService) periodicExchange() {
+func (pex *PeerExchangeService) periodicExchange(ctx context.Context) {
 	ticker := time.NewTicker(pex.exchangeInterval)
 	defer ticker.Stop()
 
-	// Do initial exchange after 30 seconds
-	time.Sleep(30 * time.Second)
-	pex.exchangePeerLists()
+	// Do initial exchange after 30 seconds (cancellable)
+	select {
+	case <-time.After(30 * time.Second):
+		pex.exchangePeerLists()
+	case <-ctx.Done():
+		return
+	case <-pex.stopCh:
+		return
+	}
 
 	for {
 		select {
 		case <-ticker.C:
 			pex.exchangePeerLists()
+		case <-ctx.Done():
+			return
 		case <-pex.stopCh:
 			return
 		}
@@ -163,7 +172,7 @@ func (pex *PeerExchangeService) exchangePeerLists() {
 }
 
 // HandlePeerExchange processes a peer exchange message from another peer
-func (pex *PeerExchangeService) HandlePeerExchange(from string, msg MessagePeerExchange) error {
+func (pex *PeerExchangeService) HandlePeerExchange(ctx context.Context, from string, msg MessagePeerExchange) error {
 	if !pex.Enabled {
 		return nil
 	}
@@ -202,6 +211,9 @@ func (pex *PeerExchangeService) HandlePeerExchange(from string, msg MessagePeerE
 
 		// Try to connect to the new peer
 		go func(addr string) {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("Attempting to connect to peer learned via PEX: %s", addr)
 			if err := pex.server.Transport.Dial(addr); err != nil {
 				DebugLog("Failed to connect to PEX peer %s: %v", addr, err)
@@ -219,7 +231,7 @@ func (pex *PeerExchangeService) HandlePeerExchange(from string, msg MessagePeerE
 }
 
 // periodicCleanup removes peers not seen in a while
-func (pex *PeerExchangeService) periodicCleanup() {
+func (pex *PeerExchangeService) periodicCleanup(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
@@ -227,6 +239,8 @@ func (pex *PeerExchangeService) periodicCleanup() {
 		select {
 		case <-ticker.C:
 			pex.cleanupOldPeers()
+		case <-ctx.Done():
+			return
 		case <-pex.stopCh:
 			return
 		}
@@ -285,9 +299,9 @@ func (pex *PeerExchangeService) ExportPeerList() []PeerInfo {
 }
 
 // handleMessagePeerExchange is called by the server when a PEX message is received
-func (s *FileServer) handleMessagePeerExchange(from string, msg MessagePeerExchange) error {
+func (s *FileServer) handleMessagePeerExchange(ctx context.Context, from string, msg MessagePeerExchange) error {
 	if s.Pex != nil {
-		return s.Pex.HandlePeerExchange(from, msg)
+		return s.Pex.HandlePeerExchange(ctx, from, msg)
 	}
 	return nil
 }

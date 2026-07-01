@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
@@ -128,24 +129,37 @@ type MessageGetFile struct {
 }
 
 // decryptOnTheFly decrypts an encrypted reader stream on-the-fly using io.Pipe
-func (s *FileServer) decryptOnTheFly(r io.Reader) io.Reader {
+func (s *FileServer) decryptOnTheFly(ctx context.Context, r io.Reader) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
-		_, err := crypto.CopyDecrypt(s.EncKey, r, pw)
-		if err != nil {
-			pw.CloseWithError(err)
-		} else {
-			pw.Close()
-		}
-		if rc, ok := r.(io.Closer); ok {
-			rc.Close()
+		defer func() {
+			if rc, ok := r.(io.Closer); ok {
+				rc.Close()
+			}
+		}()
+
+		errChan := make(chan error, 1)
+		go func() {
+			_, err := crypto.CopyDecrypt(s.EncKey, r, pw)
+			errChan <- err
+		}()
+
+		select {
+		case err := <-errChan:
+			if err != nil {
+				pw.CloseWithError(err)
+			} else {
+				pw.Close()
+			}
+		case <-ctx.Done():
+			pw.CloseWithError(ctx.Err())
 		}
 	}()
 	return pr
 }
 
 // Retrieves a file from the local store or fetches it from the network.
-func (s *FileServer) Get(key string) (io.Reader, error) {
+func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 
 	// Checks if the file exists locally.
 	if s.store.Has(s.ID, key) {
@@ -154,7 +168,7 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 		if err != nil {
 			return nil, err
 		}
-		return s.decryptOnTheFly(r), nil
+		return s.decryptOnTheFly(ctx, r), nil
 	}
 
 	fmt.Printf("[%s] dont have file (%s) locally, fetching from network...\n", s.Transport.Addr(), key)
@@ -176,6 +190,8 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 	select {
 	case <-ch:
 		// File was successfully received and written to disk
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-time.After(5 * time.Second):
 		return nil, fmt.Errorf("file %s not found on the network (timeout)", key)
 	}
@@ -184,11 +200,11 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.decryptOnTheFly(r), nil
+	return s.decryptOnTheFly(ctx, r), nil
 }
 
 // Stores a file locally and notifies peers.
-func (s *FileServer) Store(key string, r io.Reader) error {
+func (s *FileServer) Store(ctx context.Context, key string, r io.Reader) error {
 	// Store encrypted locally (streaming / constant memory)
 	size, err := s.store.WriteEncrypt(s.EncKey, s.ID, key, r)
 	if err != nil {
@@ -201,6 +217,9 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	// Stream to all connected peers concurrently
 	for _, peer := range s.Peers {
 		go func(p p2p.Peer) {
+			if ctx.Err() != nil {
+				return
+			}
 			_, fileReader, err := s.store.Read(s.ID, key)
 			if err != nil {
 				log.Printf("failed to read local file for streaming: %v", err)
@@ -326,7 +345,7 @@ func (s *FileServer) handleStream(from string) error {
 }
 
 // Main event loop for handling incoming messages.
-func (s *FileServer) loop() {
+func (s *FileServer) loop(ctx context.Context) {
 	defer func() {
 		log.Println("file server stopped due to error or user quit action")
 		s.Transport.Close()
@@ -346,23 +365,25 @@ func (s *FileServer) loop() {
 			if err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msg); err != nil {
 				log.Println("decoding error: ", err)
 			}
-			if err := s.handleMessage(rpc.From, &msg); err != nil {
+			if err := s.handleMessage(ctx, rpc.From, &msg); err != nil {
 				log.Println("handle message error: ", err)
 			}
 
 		case <-s.quitch:
+			return
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
 // Processes incoming messages.
-func (s *FileServer) handleMessage(from string, msg *Message) error {
+func (s *FileServer) handleMessage(ctx context.Context, from string, msg *Message) error {
 	switch v := msg.Payload.(type) {
 	case MessageGetFile:
 		return s.handleMessageGetFile(from, v)
 	case MessagePeerExchange:
-		return s.handleMessagePeerExchange(from, v)
+		return s.handleMessagePeerExchange(ctx, from, v)
 	}
 
 	return nil
@@ -407,7 +428,7 @@ func (s *FileServer) bootstrapNetwork() error {
 	return nil
 }
 
-func (s *FileServer) Start() error {
+func (s *FileServer) Start(ctx context.Context) error {
 	fmt.Printf("[%s] starting fileserver...\n", s.Transport.Addr())
 
 	if err := s.Transport.ListenAndAccept(); err != nil {
@@ -416,7 +437,11 @@ func (s *FileServer) Start() error {
 
 	s.bootstrapNetwork()
 
-	s.loop()
+	if s.GC != nil {
+		s.GC.Start(ctx)
+	}
+
+	s.loop(ctx)
 
 	return nil
 }
@@ -439,18 +464,18 @@ func (s *FileServer) Delete(key string) error {
 }
 
 // EnableLocalDiscovery enables mDNS discovery
-func (s *FileServer) EnableLocalDiscovery(advertiseAddr string) error {
+func (s *FileServer) EnableLocalDiscovery(ctx context.Context, advertiseAddr string) error {
 	s.Discovery = NewDiscoveryService("peervault", 3000, advertiseAddr)
 	s.Discovery.SetPeerFoundCallback(func(peerAddr string) error {
 		return s.Transport.Dial(peerAddr)
 	})
-	return s.Discovery.Start()
+	return s.Discovery.Start(ctx)
 }
 
 // EnablePeerExchange enables PEX
-func (s *FileServer) EnablePeerExchange() {
+func (s *FileServer) EnablePeerExchange(ctx context.Context) {
 	if s.Pex != nil {
-		s.Pex.Start()
+		s.Pex.Start(ctx)
 	}
 }
 
