@@ -58,7 +58,7 @@ func (qm *QuotaManager) LoadOrCreate() error {
 		}
 
 		input := strings.TrimSpace(scanner.Text())
-		bytes, err := parseStorageSize(input)
+		bytes, err := ParseStorageSize(input)
 		if err != nil {
 			fmt.Printf("Invalid format: %v. Please try again.\n", err)
 			continue
@@ -70,7 +70,7 @@ func (qm *QuotaManager) LoadOrCreate() error {
 	}
 
 	// Save configuration
-	return qm.save()
+	return qm.Save()
 }
 
 // load loads quota config from file
@@ -87,8 +87,8 @@ func (qm *QuotaManager) load() error {
 	return nil
 }
 
-// save saves quota config to file
-func (qm *QuotaManager) save() error {
+// Save saves quota config to file
+func (qm *QuotaManager) Save() error {
 	// Ensure directory exists
 	dir := filepath.Dir(qm.configPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -160,8 +160,8 @@ func (qm *QuotaManager) GetStorageStats(storageRoot string) (used int64, total i
 	return used, total, available, nil
 }
 
-// parseStorageSize parses human-readable storage size (e.g., "1GB", "500MB")
-func parseStorageSize(input string) (int64, error) {
+// ParseStorageSize parses human-readable storage size (e.g., "1GB", "500MB")
+func ParseStorageSize(input string) (int64, error) {
 	input = strings.ToUpper(strings.TrimSpace(input))
 
 	// Extract number and unit

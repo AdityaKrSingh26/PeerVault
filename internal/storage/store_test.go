@@ -32,7 +32,10 @@ func TestPathTransformFunc(t *testing.T) {
 
 func TestStore(t *testing.T) {
 	s := newStore()
-	id := crypto.GenerateID()
+	id, err := crypto.GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer teardown(t, s)
 
 	for i := 0; i < 50; i++ {

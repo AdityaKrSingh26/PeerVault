@@ -21,9 +21,12 @@ func TestCopyEncryptDecrypt(t *testing.T) {
 	dst := new(bytes.Buffer)
 
 	// generates a random 32-byte AES key.
-	key := NewEncryptionKey()
+	key, err := NewEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := CopyEncrypt(key, src, dst)
+	_, err = CopyEncrypt(key, src, dst)
 	if err != nil {
 		t.Error(err)
 	}

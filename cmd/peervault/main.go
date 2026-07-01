@@ -16,6 +16,7 @@ import (
 	"github.com/AdityaKrSingh26/PeerVault/internal/crypto"
 	"github.com/AdityaKrSingh26/PeerVault/internal/metrics"
 	"github.com/AdityaKrSingh26/PeerVault/internal/network"
+	"github.com/AdityaKrSingh26/PeerVault/internal/quota"
 	"github.com/AdityaKrSingh26/PeerVault/internal/storage"
 	"github.com/AdityaKrSingh26/PeerVault/pkg/p2p"
 )
@@ -447,6 +448,7 @@ func main() {
 		metricsAddr    = flag.String("metrics", "", "Metrics server address (e.g., :9090) - disabled if not set")
 		discoverLocal  = flag.Bool("discover-local", false, "Enable mDNS local network peer discovery")
 		discoverPex    = flag.Bool("discover-pex", false, "Enable peer exchange (PEX) protocol")
+		quotaSize      = flag.String("quota", "", "Maximum storage quota (e.g., 5GB, 500MB) - configures automatically on first startup")
 	)
 	flag.Parse()
 
@@ -518,10 +520,48 @@ func main() {
 	// Create and start server
 	server := makeServer(*listenAddr, networkKey, bootstrapNodes...)
 
+	// Determine override quota
+	var initialQuota int64
+	quotaStr := *quotaSize
+	if quotaStr == "" {
+		quotaStr = os.Getenv("PEERVAULT_QUOTA")
+	}
+	if quotaStr != "" {
+		bytes, err := quota.ParseStorageSize(quotaStr)
+		if err != nil {
+			log.Fatalf("Invalid quota format: %v", err)
+		}
+		initialQuota = bytes
+	}
+
 	// Initialize quota manager and load/create configuration
 	log.Println("Initializing storage quota...")
 	if err := server.QuotaManager.LoadOrCreate(); err != nil {
-		log.Fatalf("Failed to initialize quota: %v", err)
+		// If load/create failed (e.g. because of non-interactive stdin prompt)
+		if initialQuota > 0 {
+			server.QuotaManager.SetMaxStorage(initialQuota)
+			if err := server.QuotaManager.Save(); err != nil {
+				log.Fatalf("Failed to save quota config: %v", err)
+			}
+		} else {
+			// Check if we are headless/non-interactive
+			if !isTerminal(os.Stdin) {
+				log.Println("Headless/non-interactive startup detected. Using default 10GB storage quota.")
+				server.QuotaManager.SetMaxStorage(10 * 1024 * 1024 * 1024) // 10GB
+				if err := server.QuotaManager.Save(); err != nil {
+					log.Fatalf("Failed to save default quota config: %v", err)
+				}
+			} else {
+				log.Fatalf("Failed to initialize quota: %v", err)
+			}
+		}
+	} else if initialQuota > 0 {
+		// If it loaded successfully but user specified an override quota flag, update it
+		server.QuotaManager.SetMaxStorage(initialQuota)
+		if err := server.QuotaManager.Save(); err != nil {
+			log.Fatalf("Failed to update quota config: %v", err)
+		}
+		log.Printf("Storage quota updated to: %s", metrics.FormatBytes(initialQuota))
 	}
 	log.Printf("Storage quota configured: %s", metrics.FormatBytes(server.QuotaManager.GetMaxStorage()))
 
@@ -606,4 +646,12 @@ func main() {
 
 		select {} // Block forever
 	}
+}
+
+func isTerminal(f *os.File) bool {
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }

@@ -103,6 +103,7 @@ make build
 
 ```bash
 export PEERVAULT_KEY='your-32-byte-secure-encryption-key-here'
+export PEERVAULT_QUOTA='5GB'
 ```
 
 ### Command-Line Flags
@@ -114,6 +115,7 @@ export PEERVAULT_KEY='your-32-byte-secure-encryption-key-here'
 | `-bootstrap`          | Comma-separated bootstrap nodes | None               |
 | `-public-ip`          | Auto-detect public IP           | `false`            |
 | `-key`                | Encryption key (32 bytes)       | Default (insecure) |
+| `-quota`              | Maximum storage quota (e.g. 5GB)| None               |
 | `-interactive`        | Enable interactive mode         | `false`            |
 | `-verbose` / `-debug` | Enable debug logging            | `false`            |
 | `-metrics`            | Metrics server address          | Disabled           |
@@ -267,11 +269,19 @@ System:
 
 ### Storage Quota
 
-On first startup, configure your storage quota:
+On first startup, you can configure your storage quota interactively:
 
 ```
 Enter maximum storage size (e.g., 1GB, 500MB, 10GB): 5GB
 ```
+
+Alternatively, you can set the quota non-interactively for headless/automated deployments using the `-quota` command-line flag or the `PEERVAULT_QUOTA` environment variable:
+
+```bash
+./bin/peervault -addr :3000 -quota 5GB
+```
+
+*Note: If no quota config exists and the application is run in a non-interactive/headless environment, it will default to a 10GB storage quota.*
 
 Check quota status:
 

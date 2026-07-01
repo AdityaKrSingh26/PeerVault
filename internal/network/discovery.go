@@ -106,7 +106,7 @@ func (ds *DiscoveryService) startAdvertising() error {
 		"",
 		ds.port,
 		ips,
-		[]string{fmt.Sprintf("version=1.0"), fmt.Sprintf("addr=%s", ds.advertiseAddr)},
+		[]string{"version=1.0", fmt.Sprintf("addr=%s", ds.advertiseAddr)},
 	)
 	if err != nil {
 		return err

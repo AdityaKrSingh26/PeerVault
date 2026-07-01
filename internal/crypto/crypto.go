@@ -9,11 +9,13 @@ import (
 	"io"
 )
 
-// GenerateID generates unique identifiers
-func GenerateID() string {
+// GenerateID generates unique identifiers safely, returning an error on entropy failure.
+func GenerateID() (string, error) {
 	buf := make([]byte, 32)
-	io.ReadFull(rand.Reader, buf)
-	return hex.EncodeToString(buf)
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // HashKey hashes a given key using the SHA-256 algorithm
@@ -22,11 +24,13 @@ func HashKey(key string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// NewEncryptionKey generates a random 32-byte encryption key.
-func NewEncryptionKey() []byte {
+// NewEncryptionKey generates a random 32-byte encryption key safely, returning an error on entropy failure.
+func NewEncryptionKey() ([]byte, error) {
 	keyBuf := make([]byte, 32)
-	io.ReadFull(rand.Reader, keyBuf)
-	return keyBuf
+	if _, err := io.ReadFull(rand.Reader, keyBuf); err != nil {
+		return nil, err
+	}
+	return keyBuf, nil
 }
 
 // Copies data from a (src) to a (dst) while applying a stream cipher

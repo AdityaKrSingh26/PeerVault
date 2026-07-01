@@ -182,6 +182,7 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		// If the message is a stream, it waits for the stream to finish.
 		if rpc.Stream {
 			peer.wg.Add(1)
+			t.rpcch <- rpc
 			fmt.Printf("[%s] incoming stream, waiting...\n", conn.RemoteAddr())
 			peer.wg.Wait()
 			fmt.Printf("[%s] stream closed, resuming read loop\n", conn.RemoteAddr())
