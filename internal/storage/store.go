@@ -314,6 +314,14 @@ func (s *Store) ListAll() (map[string][]FileInfo, error) {
 	return allFiles, nil
 }
 
+// GetOriginalKey returns the original key for a given hash.
+func (s *Store) GetOriginalKey(hash string) (string, bool) {
+	s.keyMapMu.RLock()
+	defer s.keyMapMu.RUnlock()
+	key, exists := s.keyMap[hash]
+	return key, exists
+}
+
 // ClearKeyMap safely clears the key mapping
 func (s *Store) ClearKeyMap() {
 	s.keyMapMu.Lock()

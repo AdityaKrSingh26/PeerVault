@@ -265,7 +265,7 @@ func (s *FileServer) sendStream(peer p2p.Peer, key string, size int64, r io.Read
 
 	header := StreamHeader{
 		ID:   s.ID,
-		Key:  crypto.HashKey(key),
+		Key:  key,
 		Size: size,
 	}
 
@@ -311,7 +311,7 @@ func (s *FileServer) handleStream(from string) error {
 		return err
 	}
 
-	_, err := s.store.Write(header.ID, header.Key, io.LimitReader(peer, header.Size))
+	_, err := s.store.Write(s.ID, header.Key, io.LimitReader(peer, header.Size))
 	if err != nil {
 		return err
 	}
@@ -365,13 +365,14 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
-	if !s.store.Has(msg.ID, msg.Key) {
+	originalKey, exists := s.store.GetOriginalKey(msg.Key)
+	if !exists || !s.store.Has(s.ID, originalKey) {
 		return fmt.Errorf("[%s] need to serve file (%s) but it does not exist on disk", s.Transport.Addr(), msg.Key)
 	}
 
-	fmt.Printf("[%s] serving file (%s) over the network\n", s.Transport.Addr(), msg.Key)
+	fmt.Printf("[%s] serving file (%s) over the network\n", s.Transport.Addr(), originalKey)
 
-	fileSize, r, err := s.store.Read(msg.ID, msg.Key)
+	fileSize, r, err := s.store.Read(s.ID, originalKey)
 	if err != nil {
 		return err
 	}
@@ -382,7 +383,7 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		return fmt.Errorf("peer %s not in map", from)
 	}
 
-	return s.sendStream(peer, msg.Key, fileSize, r)
+	return s.sendStream(peer, originalKey, fileSize, r)
 }
 
 func (s *FileServer) bootstrapNetwork() error {
