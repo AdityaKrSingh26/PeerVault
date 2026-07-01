@@ -9,7 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/AdityaKrSingh26/PeerVault/internal/crypto"
+	"github.com/AdityaKrSingh26/PeerVault/internal/logger"
 	"github.com/AdityaKrSingh26/PeerVault/internal/metrics"
 	"github.com/AdityaKrSingh26/PeerVault/internal/network"
 	"github.com/AdityaKrSingh26/PeerVault/internal/quota"
@@ -26,7 +27,7 @@ import (
 	"github.com/AdityaKrSingh26/PeerVault/pkg/p2p"
 )
 
-func makeServer(listenAddr string, networkKey []byte, nodes ...string) *network.FileServer {
+func makeServer(listenAddr string, networkKey []byte, slogLogger *slog.Logger, nodes ...string) *network.FileServer {
 	tcptransportOpts := p2p.TCPTransportOpts{
 		ListenAddr:    listenAddr,
 		HandshakeFunc: p2p.NOPHandshakeFunc,
@@ -48,6 +49,7 @@ func makeServer(listenAddr string, networkKey []byte, nodes ...string) *network.
 		PathTransformFunc: storage.CASPathTransformFunc,
 		Transport:         tcpTransport,
 		BootstrapNodes:    nodes,
+		Logger:            slogLogger,
 	}
 
 	s := network.NewFileServer(fileServerOpts)
@@ -428,15 +430,7 @@ func interactiveMode(ctx context.Context, server *network.FileServer) {
 	}
 }
 
-// Global debug flag
-var DebugMode bool
 
-// DebugLog prints debug messages only when debug mode is enabled
-func DebugLog(format string, args ...interface{}) {
-	if DebugMode {
-		log.Printf("[DEBUG] "+format, args...)
-	}
-}
 
 func main() {
 	// Command line flags
@@ -454,14 +448,15 @@ func main() {
 		discoverLocal  = flag.Bool("discover-local", false, "Enable mDNS local network peer discovery")
 		discoverPex    = flag.Bool("discover-pex", false, "Enable peer exchange (PEX) protocol")
 		quotaSize      = flag.String("quota", "", "Maximum storage quota (e.g., 5GB, 500MB) - configures automatically on first startup")
+		logLevel       = flag.String("log-level", "info", "log level: debug, info, warn, error")
 	)
 	flag.Parse()
 
-	// Set global debug mode
-	DebugMode = *verbose || *debug
-	if DebugMode {
-		log.Println("🐛 Debug mode enabled")
+	// Initialize structured logger
+	if *verbose || *debug {
+		*logLevel = "debug"
 	}
+	slogLogger := logger.New(*logLevel)
 
 	// Get encryption key from flag or env var
 	var networkKey []byte
@@ -471,7 +466,8 @@ func main() {
 	} else if envKey := os.Getenv("PEERVAULT_KEY"); envKey != "" {
 		keySource = envKey
 	} else {
-		log.Fatal("-key is required. Generate one with: openssl rand -hex 32")
+		slogLogger.Error("-key is required. Generate one with: openssl rand -hex 32")
+		os.Exit(1)
 	}
 
 	// If key is 64 characters of hex, decode it to 32 bytes
@@ -488,7 +484,8 @@ func main() {
 
 	// Ensure key is exactly 32 bytes for AES-256
 	if len(networkKey) != 32 {
-		log.Fatalf("-key must be exactly 32 bytes, got %d. Generate one with: openssl rand -hex 32", len(networkKey))
+		slogLogger.Error("invalid key size", "size", len(networkKey))
+		os.Exit(1)
 	}
 
 	// Parse bootstrap nodes
@@ -506,18 +503,18 @@ func main() {
 	if *advertiseAddr != "" {
 		// Use explicitly provided advertise address
 		finalAdvertiseAddr = *advertiseAddr
-		log.Printf("Using advertise address: %s", finalAdvertiseAddr)
+		slogLogger.Info("Using advertise address", "address", finalAdvertiseAddr)
 	} else if *detectPublicIP {
 		// Auto-detect public IP
-		log.Println("Detecting public IP address...")
+		slogLogger.Info("Detecting public IP address...")
 		publicIP, err := network.GetPublicIP()
 		if err != nil {
-			log.Printf("⚠️  Failed to detect public IP: %v", err)
-			log.Println("Falling back to local IP")
+			slogLogger.Warn("Failed to detect public IP", "err", err)
+			slogLogger.Info("Falling back to local IP")
 			localIP := network.GetLocalIP()
 			finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(localIP, *listenAddr)
 		} else {
-			log.Printf("Detected public IP: %s", publicIP)
+			slogLogger.Info("Detected public IP", "ip", publicIP)
 			finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(publicIP, *listenAddr)
 		}
 	} else {
@@ -527,7 +524,7 @@ func main() {
 	}
 
 	// Create and start server
-	server := makeServer(*listenAddr, networkKey, bootstrapNodes...)
+	server := makeServer(*listenAddr, networkKey, slogLogger, bootstrapNodes...)
 
 	// Determine override quota
 	var initialQuota int64
@@ -538,41 +535,46 @@ func main() {
 	if quotaStr != "" {
 		bytes, err := quota.ParseStorageSize(quotaStr)
 		if err != nil {
-			log.Fatalf("Invalid quota format: %v", err)
+			slogLogger.Error("Invalid quota format", "err", err)
+			os.Exit(1)
 		}
 		initialQuota = bytes
 	}
 
 	// Initialize quota manager and load/create configuration
-	log.Println("Initializing storage quota...")
+	slogLogger.Info("Initializing storage quota...")
 	if err := server.QuotaManager.LoadOrCreate(); err != nil {
 		// If load/create failed (e.g. because of non-interactive stdin prompt)
 		if initialQuota > 0 {
 			server.QuotaManager.SetMaxStorage(initialQuota)
 			if err := server.QuotaManager.Save(); err != nil {
-				log.Fatalf("Failed to save quota config: %v", err)
+				slogLogger.Error("Failed to save quota config", "err", err)
+				os.Exit(1)
 			}
 		} else {
 			// Check if we are headless/non-interactive
 			if !isTerminal(os.Stdin) {
-				log.Println("Headless/non-interactive startup detected. Using default 10GB storage quota.")
+				slogLogger.Info("Headless/non-interactive startup detected. Using default 10GB storage quota.")
 				server.QuotaManager.SetMaxStorage(10 * 1024 * 1024 * 1024) // 10GB
 				if err := server.QuotaManager.Save(); err != nil {
-					log.Fatalf("Failed to save default quota config: %v", err)
+					slogLogger.Error("Failed to save default quota config", "err", err)
+					os.Exit(1)
 				}
 			} else {
-				log.Fatalf("Failed to initialize quota: %v", err)
+				slogLogger.Error("Failed to initialize quota", "err", err)
+				os.Exit(1)
 			}
 		}
 	} else if initialQuota > 0 {
 		// If it loaded successfully but user specified an override quota flag, update it
 		server.QuotaManager.SetMaxStorage(initialQuota)
 		if err := server.QuotaManager.Save(); err != nil {
-			log.Fatalf("Failed to update quota config: %v", err)
+			slogLogger.Error("Failed to update quota config", "err", err)
+			os.Exit(1)
 		}
-		log.Printf("Storage quota updated to: %s", metrics.FormatBytes(initialQuota))
+		slogLogger.Info("Storage quota updated", "quota", metrics.FormatBytes(initialQuota))
 	}
-	log.Printf("Storage quota configured: %s", metrics.FormatBytes(server.QuotaManager.GetMaxStorage()))
+	slogLogger.Info("Storage quota configured", "quota", metrics.FormatBytes(server.QuotaManager.GetMaxStorage()))
 
 	// Set up OS signal handling context
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -580,14 +582,14 @@ func main() {
 
 	// Enable peer discovery if requested
 	if *discoverLocal {
-		log.Println("Enabling local network discovery (mDNS)...")
+		slogLogger.Info("Enabling local network discovery (mDNS)...")
 		if err := server.EnableLocalDiscovery(ctx, finalAdvertiseAddr); err != nil {
-			log.Printf("Warning: Failed to enable local discovery: %v", err)
+			slogLogger.Warn("Failed to enable local discovery", "err", err)
 		}
 	}
 
 	if *discoverPex {
-		log.Println("Enabling peer exchange (PEX)...")
+		slogLogger.Info("Enabling peer exchange (PEX)...")
 		server.EnablePeerExchange(ctx)
 	}
 
@@ -597,7 +599,7 @@ func main() {
 		metricsServer = metrics.NewMetricsServer(*metricsAddr, server.Metrics)
 		go func() {
 			if err := metricsServer.Start(); err != nil && err != http.ErrServerClosed {
-				log.Printf("Metrics server error: %v", err)
+				slogLogger.Error("Metrics server error", "err", err)
 			}
 		}()
 	}
@@ -607,16 +609,15 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("Starting PeerVault server")
-		log.Printf("  Listen address: %s", *listenAddr)
-		log.Printf("  Advertise address: %s", finalAdvertiseAddr)
-		log.Printf("  Local IP: %s", network.GetLocalIP())
-		if len(bootstrapNodes) > 0 {
-			log.Printf("  Bootstrap nodes: %v", bootstrapNodes)
-		}
+		slogLogger.Info("Starting PeerVault server",
+			"addr", *listenAddr,
+			"advertise", finalAdvertiseAddr,
+			"local_ip", network.GetLocalIP(),
+			"bootstrap", bootstrapNodes,
+		)
 
 		if err := server.Start(ctx); err != nil && err != context.Canceled {
-			log.Printf("Server stopped with error: %v", err)
+			slogLogger.Error("Server stopped with error", "err", err)
 		}
 	}()
 
@@ -643,9 +644,9 @@ func main() {
 				data := bytes.NewReader([]byte(fmt.Sprintf("Demo file %d content created at %s", i, time.Now().Format("15:04:05"))))
 
 				if err := server.Store(ctx, key, data); err != nil {
-					log.Printf("Error storing %s: %v", key, err)
+					slogLogger.Error("Error storing file in demo", "key", key, "err", err)
 				} else {
-					log.Printf("Stored: %s", key)
+					slogLogger.Info("Stored file in demo", "key", key)
 				}
 			}
 
@@ -662,10 +663,10 @@ func main() {
 				key := fmt.Sprintf("demo_file_%d.txt", i)
 				reader, err := server.Get(ctx, key)
 				if err != nil {
-					log.Printf("Error retrieving %s: %v", key, err)
+					slogLogger.Error("Error retrieving file in demo", "key", key, "err", err)
 				} else {
 					data, _ := io.ReadAll(reader)
-					log.Printf("Retrieved %s: %s", key, string(data))
+					slogLogger.Info("Retrieved file in demo", "key", key, "content", string(data))
 				}
 			}
 			stop() // Signal loop cancellation on exit
@@ -679,7 +680,7 @@ func main() {
 		}
 	}
 
-	log.Println("Shutting down PeerVault server...")
+	slogLogger.Info("Shutting down PeerVault server...")
 	server.Stop()
 	if metricsServer != nil {
 		metricsServer.Stop()
@@ -692,7 +693,7 @@ func main() {
 	}
 
 	wg.Wait()
-	log.Println("PeerVault server cleanly shut down.")
+	slogLogger.Info("PeerVault server cleanly shut down.")
 }
 
 func isTerminal(f *os.File) bool {

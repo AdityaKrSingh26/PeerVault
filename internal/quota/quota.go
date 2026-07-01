@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/AdityaKrSingh26/PeerVault/internal/metrics"
 	"github.com/AdityaKrSingh26/PeerVault/internal/storage"
@@ -22,18 +23,25 @@ type QuotaConfig struct {
 
 // QuotaManager manages storage quotas
 type QuotaManager struct {
-	config     QuotaConfig
-	configPath string
+	storageRoot string
+	configPath  string
+	config      *QuotaConfig
+	mu          sync.RWMutex
+	logger      *slog.Logger
 }
 
 // NewQuotaManager creates a new quota manager
-func NewQuotaManager(storageRoot string) *QuotaManager {
-	configPath := filepath.Join(storageRoot, ".quota_config.json")
+func NewQuotaManager(storageRoot string, logger *slog.Logger) *QuotaManager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &QuotaManager{
-		config: QuotaConfig{
-			StorageRoot: storageRoot,
+		storageRoot: storageRoot,
+		configPath:  filepath.Join(storageRoot, "quota.json"),
+		config: &QuotaConfig{
+			MaxStorageBytes: 10 * 1024 * 1024 * 1024, // Default 10GB
 		},
-		configPath: configPath,
+		logger: logger,
 	}
 }
 
@@ -119,7 +127,7 @@ func (qm *QuotaManager) GetCurrentUsage(storageRoot string) (int64, error) {
 
 	err := filepath.Walk(storageRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Printf("WARN walk error at %s: %v", path, err)
+			qm.logger.Warn("walk error", "path", path, "err", err)
 			return nil // Skip errors
 		}
 		if !info.IsDir() {

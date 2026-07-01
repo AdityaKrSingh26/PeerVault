@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -32,23 +32,28 @@ type PeerExchangeService struct {
 	Enabled          bool
 	exchangeInterval time.Duration
 	stopCh           chan struct{}
+	logger           *slog.Logger
 }
 
 // NewPeerExchangeService creates a new PEX service
-func NewPeerExchangeService(server *FileServer) *PeerExchangeService {
+func NewPeerExchangeService(server *FileServer, logger *slog.Logger) *PeerExchangeService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &PeerExchangeService{
 		knownPeers:       make(map[string]*PeerInfo),
 		server:           server,
 		Enabled:          false,
 		exchangeInterval: 5 * time.Minute, // Exchange peer lists every 5 minutes
 		stopCh:           make(chan struct{}),
+		logger:           logger,
 	}
 }
 
 // Start enables peer exchange
 func (pex *PeerExchangeService) Start(ctx context.Context) {
 	pex.Enabled = true
-	log.Println("Peer exchange (PEX) enabled")
+	pex.logger.Info("Peer exchange (PEX) enabled")
 
 	// Start periodic peer list exchange
 	go pex.periodicExchange(ctx)
@@ -61,7 +66,7 @@ func (pex *PeerExchangeService) Start(ctx context.Context) {
 func (pex *PeerExchangeService) Stop() {
 	pex.Enabled = false
 	close(pex.stopCh)
-	log.Println("Peer exchange (PEX) disabled")
+	pex.logger.Info("Peer exchange (PEX) disabled")
 }
 
 // AddKnownPeer adds a peer to the known peers list
@@ -82,7 +87,7 @@ func (pex *PeerExchangeService) AddKnownPeer(address string, source string) {
 			LastSeen: time.Now(),
 			Source:   source,
 		}
-		DebugLog("Added peer to PEX cache: %s (source: %s)", address, source)
+		pex.logger.Debug("Added peer to PEX cache", "peer", address, "source", source)
 	}
 }
 
@@ -165,9 +170,9 @@ func (pex *PeerExchangeService) exchangePeerLists() {
 
 	// Broadcast to all connected peers
 	if err := pex.server.broadcast(&msg); err != nil {
-		DebugLog("Failed to broadcast peer list: %v", err)
+		pex.logger.Debug("Failed to broadcast peer list", "err", err)
 	} else {
-		DebugLog("Exchanged peer list with %d known peers", len(knownPeers))
+		pex.logger.Debug("Exchanged peer list", "count", len(knownPeers))
 	}
 }
 
@@ -177,7 +182,7 @@ func (pex *PeerExchangeService) HandlePeerExchange(ctx context.Context, from str
 		return nil
 	}
 
-	DebugLog("Received %d peers via PEX from %s", len(msg.Peers), from)
+	pex.logger.Debug("Received peers via PEX", "count", len(msg.Peers), "from", from)
 
 	newPeersFound := 0
 
@@ -214,17 +219,17 @@ func (pex *PeerExchangeService) HandlePeerExchange(ctx context.Context, from str
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("Attempting to connect to peer learned via PEX: %s", addr)
+			pex.logger.Info("Attempting to connect to peer learned via PEX", "peer", addr)
 			if err := pex.server.Transport.Dial(addr); err != nil {
-				DebugLog("Failed to connect to PEX peer %s: %v", addr, err)
+				pex.logger.Debug("Failed to connect to PEX peer", "peer", addr, "err", err)
 			} else {
-				log.Printf("Successfully connected to peer %s learned via PEX", addr)
+				pex.logger.Info("Successfully connected to peer learned via PEX", "peer", addr)
 			}
 		}(peer.Address)
 	}
 
 	if newPeersFound > 0 {
-		log.Printf("Learned about %d new peers via PEX from %s", newPeersFound, from)
+		pex.logger.Info("Learned new peers via PEX", "count", newPeersFound, "from", from)
 	}
 
 	return nil
@@ -263,7 +268,7 @@ func (pex *PeerExchangeService) cleanupOldPeers() {
 	}
 
 	if removed > 0 {
-		DebugLog("Cleaned up %d stale peers from PEX cache", removed)
+		pex.logger.Debug("Cleaned up stale peers from PEX cache", "count", removed)
 	}
 }
 
@@ -340,6 +345,6 @@ func (pex *PeerExchangeService) RequestPeerList(peerAddr string) error {
 		return err
 	}
 
-	DebugLog("Requested peer list from %s", peerAddr)
+	pex.logger.Debug("Requested peer list", "peer", peerAddr)
 	return nil
 }

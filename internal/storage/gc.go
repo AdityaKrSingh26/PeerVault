@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,12 +19,17 @@ type GarbageCollector struct {
 	cleanupInterval  time.Duration
 	integrityEnabled bool
 	stopChan         chan struct{}
+	logger           *slog.Logger
 }
 
 // NewGarbageCollector creates a new garbage collector
-func NewGarbageCollector(store *Store, nodeID string) *GarbageCollector {
+func NewGarbageCollector(store *Store, nodeID string, logger *slog.Logger) *GarbageCollector {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if err := ValidateNodeID(nodeID); err != nil {
-		log.Fatalf("invalid node ID %q for garbage collector: %v", nodeID, err)
+		logger.Error("invalid node ID for garbage collector", "node", nodeID, "err", err)
+		os.Exit(1)
 	}
 	return &GarbageCollector{
 		store:            store,
@@ -32,12 +37,13 @@ func NewGarbageCollector(store *Store, nodeID string) *GarbageCollector {
 		cleanupInterval:  1 * time.Hour, // Run cleanup every hour
 		integrityEnabled: true,
 		stopChan:         make(chan struct{}),
+		logger:           logger,
 	}
 }
 
 // Start begins the periodic garbage collection routine
 func (gc *GarbageCollector) Start(ctx context.Context) {
-	log.Println("Starting garbage collector...")
+	gc.logger.Info("Starting garbage collector", "node", gc.nodeID)
 	go gc.run(ctx)
 }
 
@@ -62,10 +68,10 @@ func (gc *GarbageCollector) run(ctx context.Context) {
 		case <-ticker.C:
 			gc.performCleanup()
 		case <-ctx.Done():
-			log.Println("Garbage collector stopped due to context cancellation")
+			gc.logger.Info("Garbage collector stopped due to context cancellation", "node", gc.nodeID)
 			return
 		case <-gc.stopChan:
-			log.Println("Garbage collector stopped")
+			gc.logger.Info("Garbage collector stopped", "node", gc.nodeID)
 			return
 		}
 	}
@@ -73,7 +79,7 @@ func (gc *GarbageCollector) run(ctx context.Context) {
 
 // performCleanup runs integrity checks and cleanup operations
 func (gc *GarbageCollector) performCleanup() {
-	log.Println("Running garbage collection...")
+	gc.logger.Info("Running garbage collection", "node", gc.nodeID)
 	start := time.Now()
 
 	stats := CleanupStats{
@@ -85,18 +91,23 @@ func (gc *GarbageCollector) performCleanup() {
 	if gc.integrityEnabled {
 		// Verify file integrity
 		if err := gc.verifyIntegrity(&stats); err != nil {
-			log.Printf("Error during integrity verification: %v", err)
+			gc.logger.Error("Error during integrity verification", "node", gc.nodeID, "err", err)
 		}
 	}
 
 	// Clean up orphaned files
 	if err := gc.cleanOrphanedFiles(&stats); err != nil {
-		log.Printf("Error during orphan cleanup: %v", err)
+		gc.logger.Error("Error during orphan cleanup", "node", gc.nodeID, "err", err)
 	}
 
 	elapsed := time.Since(start)
-	log.Printf("Garbage collection completed in %v: %d corrupted, %d orphaned, %d removed",
-		elapsed, stats.CorruptedFiles, stats.OrphanedFiles, stats.RemovedFiles)
+	gc.logger.Info("Garbage collection completed",
+		"node", gc.nodeID,
+		"duration", elapsed,
+		"corrupted", stats.CorruptedFiles,
+		"orphaned", stats.OrphanedFiles,
+		"removed", stats.RemovedFiles,
+	)
 }
 
 // CleanupStats tracks garbage collection statistics
@@ -108,7 +119,7 @@ type CleanupStats struct {
 
 // verifyIntegrity checks if stored files have valid hashes
 func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
-	log.Println("Verifying file integrity...")
+	gc.logger.Info("Verifying file integrity", "node", gc.nodeID)
 
 	nodeDir, err := gc.store.resolvePath(gc.nodeID, "")
 	if err != nil {
@@ -120,7 +131,7 @@ func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
 
 	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Printf("WARN walk error at %s: %v", path, err)
+			gc.logger.Warn("walk error", "node", gc.nodeID, "path", path, "err", err)
 			return nil // Skip errors
 		}
 
@@ -139,22 +150,25 @@ func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
 		// Calculate actual hash of file content
 		actualHash, err := calculateFileHash(path)
 		if err != nil {
-			log.Printf("Warning: Failed to calculate hash for %s: %v", path, err)
+			gc.logger.Warn("Failed to calculate hash", "node", gc.nodeID, "path", path, "err", err)
 			return nil
 		}
 
 		// Compare hashes
 		if actualHash != expectedHash {
-			log.Printf("INTEGRITY VIOLATION: File %s has incorrect hash", path)
-			log.Printf("  Expected: %s", expectedHash)
-			log.Printf("  Actual:   %s", actualHash)
+			gc.logger.Error("INTEGRITY VIOLATION: File has incorrect hash",
+				"node", gc.nodeID,
+				"path", path,
+				"expected", expectedHash,
+				"actual", actualHash,
+			)
 			stats.CorruptedFiles++
 
 			// Remove corrupted file
 			if err := os.RemoveAll(filepath.Dir(path)); err != nil {
-				log.Printf("Failed to remove corrupted file: %v", err)
+				gc.logger.Error("Failed to remove corrupted file", "node", gc.nodeID, "path", path, "err", err)
 			} else {
-				log.Printf("Removed corrupted file: %s", path)
+				gc.logger.Info("Removed corrupted file", "node", gc.nodeID, "path", path)
 				stats.RemovedFiles++
 			}
 		}
@@ -167,7 +181,7 @@ func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
 
 // cleanOrphanedFiles removes empty directories and temporary files
 func (gc *GarbageCollector) cleanOrphanedFiles(stats *CleanupStats) error {
-	log.Println("Cleaning orphaned files...")
+	gc.logger.Info("Cleaning orphaned files", "node", gc.nodeID)
 
 	nodeDir, err := gc.store.resolvePath(gc.nodeID, "")
 	if err != nil {
@@ -180,7 +194,7 @@ func (gc *GarbageCollector) cleanOrphanedFiles(stats *CleanupStats) error {
 	// Find and remove empty directories
 	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Printf("WARN walk error at %s: %v", path, err)
+			gc.logger.Warn("walk error", "node", gc.nodeID, "path", path, "err", err)
 			return nil
 		}
 
@@ -192,9 +206,9 @@ func (gc *GarbageCollector) cleanOrphanedFiles(stats *CleanupStats) error {
 			}
 
 			if len(entries) == 0 {
-				log.Printf("Removing empty directory: %s", path)
+				gc.logger.Info("Removing empty directory", "node", gc.nodeID, "path", path)
 				if err := os.Remove(path); err != nil {
-					log.Printf("Failed to remove empty directory: %v", err)
+					gc.logger.Error("Failed to remove empty directory", "node", gc.nodeID, "path", path, "err", err)
 				} else {
 					stats.OrphanedFiles++
 					stats.RemovedFiles++

@@ -7,7 +7,8 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type FileServerOpts struct {
 	PathTransformFunc storage.PathTransformFunc
 	Transport         p2p.Transport
 	BootstrapNodes    []string
+	Logger            *slog.Logger
 }
 
 // StreamHeader represents the header of a file stream sent over the network.
@@ -56,6 +58,10 @@ type FileServer struct {
 
 // Initializes a new "FileServer" instance.
 func NewFileServer(opts FileServerOpts) *FileServer {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+
 	storeOpts := storage.StoreOpts{
 		Root:              opts.StorageRoot,
 		PathTransformFunc: opts.PathTransformFunc,
@@ -64,18 +70,20 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 	if len(opts.ID) == 0 {
 		id, err := crypto.GenerateID()
 		if err != nil {
-			log.Fatalf("failed to generate secure node ID: %v", err)
+			opts.Logger.Error("failed to generate secure node ID", "err", err)
+			os.Exit(1)
 		}
 		opts.ID = id
 	}
 
 	if err := storage.ValidateNodeID(opts.ID); err != nil {
-		log.Fatalf("invalid node ID %q: %v", opts.ID, err)
+		opts.Logger.Error("invalid node ID", "node", opts.ID, "err", err)
+		os.Exit(1)
 	}
 
 	store := storage.NewStore(storeOpts)
-	quotaManager := quota.NewQuotaManager(opts.StorageRoot)
-	gc := storage.NewGarbageCollector(store, opts.ID)
+	quotaManager := quota.NewQuotaManager(opts.StorageRoot, opts.Logger)
+	gc := storage.NewGarbageCollector(store, opts.ID, opts.Logger)
 	metricsObj := metrics.NewMetrics()
 
 	server := &FileServer{
@@ -89,7 +97,7 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 		waiters:        make(map[string][]chan struct{}),
 	}
 
-	server.Pex = NewPeerExchangeService(server)
+	server.Pex = NewPeerExchangeService(server, opts.Logger)
 	return server
 }
 
@@ -108,7 +116,7 @@ func (s *FileServer) broadcast(msg *Message) error {
 		peer.Send([]byte{p2p.IncomingMessage})
 		if err := peer.Send(buf.Bytes()); err != nil {
 			failed = append(failed, addr)
-			log.Printf("WARN broadcast failed to peer %s: %v", addr, err)
+			s.Logger.Warn("broadcast failed to peer", "peer", addr, "err", err)
 		}
 	}
 	if len(failed) > 0 {
@@ -170,7 +178,7 @@ func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 
 	// Checks if the file exists locally.
 	if s.store.Has(s.ID, key) {
-		fmt.Printf("[%s] serving file (%s) from local disk\n", s.Transport.Addr(), key)
+		s.Logger.Info("serving file from local disk", "peer", s.Transport.Addr(), "key", key)
 		_, r, err := s.store.Read(s.ID, key)
 		if err != nil {
 			return nil, err
@@ -178,7 +186,7 @@ func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 		return s.decryptOnTheFly(ctx, r), nil
 	}
 
-	fmt.Printf("[%s] dont have file (%s) locally, fetching from network...\n", s.Transport.Addr(), key)
+	s.Logger.Info("fetching file from network", "peer", s.Transport.Addr(), "key", key)
 
 	ch := s.registerFileWaiter(key)
 
@@ -190,7 +198,7 @@ func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 		},
 	}
 	if err := s.broadcast(&msg); err != nil {
-		log.Printf("Warning: file request broadcast encountered errors: %v", err)
+		s.Logger.Warn("file request broadcast encountered errors", "err", err)
 	}
 
 	// Wait for notification or timeout
@@ -229,7 +237,7 @@ func (s *FileServer) Store(ctx context.Context, key string, r io.Reader) error {
 			}
 			_, fileReader, err := s.store.Read(s.ID, key)
 			if err != nil {
-				log.Printf("failed to read local file for streaming: %v", err)
+				s.Logger.Error("failed to read local file for streaming", "key", key, "err", err)
 				return
 			}
 			defer func() {
@@ -239,7 +247,7 @@ func (s *FileServer) Store(ctx context.Context, key string, r io.Reader) error {
 			}()
 
 			if err := s.sendStream(p, key, size, fileReader); err != nil {
-				log.Printf("failed to send stream to peer: %v", err)
+				s.Logger.Error("failed to send stream to peer", "peer", p.RemoteAddr().String(), "key", key, "err", err)
 			}
 		}(peer)
 	}
@@ -259,7 +267,7 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 	// Adds the peer to the peers map.
 	s.Peers[p.RemoteAddr().String()] = p
 
-	log.Printf("connected with remote %s", p.RemoteAddr())
+	s.Logger.Info("connected with remote peer", "peer", p.RemoteAddr().String())
 
 	return nil
 }
@@ -358,7 +366,7 @@ func (s *FileServer) handleStream(from string) error {
 // Main event loop for handling incoming messages.
 func (s *FileServer) loop(ctx context.Context) {
 	defer func() {
-		log.Println("file server stopped due to error or user quit action")
+		s.Logger.Info("file server stopped", "node", s.ID)
 		s.Transport.Close()
 	}()
 
@@ -367,17 +375,17 @@ func (s *FileServer) loop(ctx context.Context) {
 		case rpc := <-s.Transport.Consume():
 			if rpc.Stream {
 				if err := s.handleStream(rpc.From); err != nil {
-					log.Println("handle stream error: ", err)
+					s.Logger.Error("handle stream error", "node", s.ID, "err", err)
 				}
 				continue
 			}
 
 			var msg Message
 			if err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msg); err != nil {
-				log.Println("decoding error: ", err)
+				s.Logger.Error("decoding message error", "node", s.ID, "err", err)
 			}
 			if err := s.handleMessage(ctx, rpc.From, &msg); err != nil {
-				log.Println("handle message error: ", err)
+				s.Logger.Error("handle message error", "node", s.ID, "err", err)
 			}
 
 		case <-s.quitch:
@@ -406,7 +414,7 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		return fmt.Errorf("[%s] need to serve file (%s) but it does not exist on disk", s.Transport.Addr(), msg.Key)
 	}
 
-	fmt.Printf("[%s] serving file (%s) over the network\n", s.Transport.Addr(), originalKey)
+	s.Logger.Info("serving file over the network", "peer", s.Transport.Addr(), "key", originalKey)
 
 	fileSize, r, err := s.store.Read(s.ID, originalKey)
 	if err != nil {
@@ -429,9 +437,9 @@ func (s *FileServer) bootstrapNetwork() error {
 		}
 
 		go func(addr string) {
-			fmt.Printf("[%s] attemping to connect with remote %s\n", s.Transport.Addr(), addr)
+			s.Logger.Info("attempting to connect with bootstrap node", "peer", s.Transport.Addr(), "bootstrap", addr)
 			if err := s.Transport.Dial(addr); err != nil {
-				log.Println("dial error: ", err)
+				s.Logger.Error("bootstrap node dial error", "err", err)
 			}
 		}(addr)
 	}
@@ -440,7 +448,7 @@ func (s *FileServer) bootstrapNetwork() error {
 }
 
 func (s *FileServer) Start(ctx context.Context) error {
-	fmt.Printf("[%s] starting fileserver...\n", s.Transport.Addr())
+	s.Logger.Info("starting fileserver", "peer", s.Transport.Addr())
 
 	if err := s.Transport.ListenAndAccept(); err != nil {
 		return err
@@ -476,7 +484,7 @@ func (s *FileServer) Delete(key string) error {
 
 // EnableLocalDiscovery enables mDNS discovery
 func (s *FileServer) EnableLocalDiscovery(ctx context.Context, advertiseAddr string) error {
-	s.Discovery = NewDiscoveryService("peervault", 3000, advertiseAddr)
+	s.Discovery = NewDiscoveryService("peervault", 3000, advertiseAddr, s.Logger)
 	s.Discovery.SetPeerFoundCallback(func(peerAddr string) error {
 		return s.Transport.Dial(peerAddr)
 	})

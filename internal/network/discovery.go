@@ -3,7 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -12,13 +12,6 @@ import (
 
 	"github.com/hashicorp/mdns"
 )
-
-// DebugLog is a simple debug logging function for the network package
-func DebugLog(format string, args ...interface{}) {
-	// For now, just use regular logging
-	// This could be enhanced with a debug flag later
-	log.Printf("[DEBUG] "+format, args...)
-}
 
 const (
 	// mDNS service type for PeerVault
@@ -39,10 +32,14 @@ type DiscoveryService struct {
 	stopCh          chan struct{}
 	ctx             context.Context
 	cancel          context.CancelFunc
+	logger          *slog.Logger
 }
 
 // NewDiscoveryService creates a new mDNS discovery service
-func NewDiscoveryService(serviceName string, port int, advertiseAddr string) *DiscoveryService {
+func NewDiscoveryService(serviceName string, port int, advertiseAddr string, logger *slog.Logger) *DiscoveryService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DiscoveryService{
 		serviceName:     serviceName,
@@ -52,6 +49,7 @@ func NewDiscoveryService(serviceName string, port int, advertiseAddr string) *Di
 		stopCh:          make(chan struct{}),
 		ctx:             ctx,
 		cancel:          cancel,
+		logger:          logger,
 	}
 }
 
@@ -65,7 +63,7 @@ func (ds *DiscoveryService) Start(ctx context.Context) error {
 	// Start discovering other nodes
 	go ds.startDiscovery(ctx)
 
-	log.Printf("mDNS discovery started: advertising as %s on port %d", ds.serviceName, ds.port)
+	ds.logger.Info("mDNS discovery started", "service", ds.serviceName, "port", ds.port)
 	return nil
 }
 
@@ -76,7 +74,7 @@ func (ds *DiscoveryService) Stop() {
 	if ds.server != nil {
 		ds.server.Shutdown()
 	}
-	log.Println("mDNS discovery stopped")
+	ds.logger.Info("mDNS discovery stopped")
 }
 
 // SetPeerFoundCallback sets the callback for when a peer is discovered
@@ -162,7 +160,7 @@ func (ds *DiscoveryService) discoverPeers(ctx context.Context) {
 		}
 
 		if err := mdns.Query(params); err != nil {
-			DebugLog("mDNS query error: %v", err)
+			ds.logger.Debug("mDNS query error", "err", err)
 		}
 	}()
 
@@ -211,7 +209,7 @@ func (ds *DiscoveryService) handleDiscoveredPeer(ctx context.Context, entry *mdn
 	ds.discoveredPeers[peerAddr] = time.Now()
 	ds.peerLock.Unlock()
 
-	log.Printf("Discovered peer via mDNS: %s (%s)", peerAddr, entry.Name)
+	ds.logger.Info("Discovered peer via mDNS", "peer", peerAddr, "name", entry.Name)
 
 	// Notify callback
 	if ds.onPeerFound != nil {
@@ -220,9 +218,9 @@ func (ds *DiscoveryService) handleDiscoveredPeer(ctx context.Context, entry *mdn
 				return
 			}
 			if err := ds.onPeerFound(peerAddr); err != nil {
-				DebugLog("Failed to connect to discovered peer %s: %v", peerAddr, err)
+				ds.logger.Debug("Failed to connect to discovered peer", "peer", peerAddr, "err", err)
 			} else {
-				log.Printf("Successfully connected to peer %s discovered via mDNS", peerAddr)
+				ds.logger.Info("Successfully connected to peer discovered via mDNS", "peer", peerAddr)
 			}
 		}()
 	}
@@ -306,7 +304,7 @@ func (ds *DiscoveryService) CleanupOldPeers() {
 	for peer, lastSeen := range ds.discoveredPeers {
 		if lastSeen.Before(cutoff) {
 			delete(ds.discoveredPeers, peer)
-			DebugLog("Removed stale peer from discovery cache: %s", peer)
+			ds.logger.Debug("Removed stale peer from discovery cache", "peer", peer)
 		}
 	}
 }
