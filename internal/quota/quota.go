@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -118,6 +119,7 @@ func (qm *QuotaManager) GetCurrentUsage(storageRoot string) (int64, error) {
 
 	err := filepath.Walk(storageRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			log.Printf("WARN walk error at %s: %v", path, err)
 			return nil // Skip errors
 		}
 		if !info.IsDir() {
@@ -140,7 +142,10 @@ func (qm *QuotaManager) CheckQuota(storageRoot string, newFileSize int64) (bool,
 		return false, 0, err
 	}
 
-	availableSpace := qm.config.MaxStorageBytes - currentUsage
+	var availableSpace int64
+	if currentUsage < qm.config.MaxStorageBytes {
+		availableSpace = qm.config.MaxStorageBytes - currentUsage
+	}
 	return newFileSize <= availableSpace, availableSpace, nil
 }
 

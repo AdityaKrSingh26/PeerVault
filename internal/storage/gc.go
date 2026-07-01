@@ -120,6 +120,7 @@ func (gc *GarbageCollector) verifyIntegrity(stats *CleanupStats) error {
 
 	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			log.Printf("WARN walk error at %s: %v", path, err)
 			return nil // Skip errors
 		}
 
@@ -179,6 +180,7 @@ func (gc *GarbageCollector) cleanOrphanedFiles(stats *CleanupStats) error {
 	// Find and remove empty directories
 	err = filepath.Walk(nodeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			log.Printf("WARN walk error at %s: %v", path, err)
 			return nil
 		}
 

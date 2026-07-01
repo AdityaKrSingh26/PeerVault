@@ -95,18 +95,25 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 
 // Sends a message to all connected peers.
 func (s *FileServer) broadcast(msg *Message) error {
+	s.PeerLock.Lock()
+	defer s.PeerLock.Unlock()
+
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		return err
 	}
 
-	for _, peer := range s.Peers {
+	var failed []string
+	for addr, peer := range s.Peers {
 		peer.Send([]byte{p2p.IncomingMessage})
 		if err := peer.Send(buf.Bytes()); err != nil {
-			return err
+			failed = append(failed, addr)
+			log.Printf("WARN broadcast failed to peer %s: %v", addr, err)
 		}
 	}
-
+	if len(failed) > 0 {
+		return fmt.Errorf("broadcast failed to %d peer(s): %v", len(failed), failed)
+	}
 	return nil
 }
 
@@ -183,7 +190,7 @@ func (s *FileServer) Get(ctx context.Context, key string) (io.Reader, error) {
 		},
 	}
 	if err := s.broadcast(&msg); err != nil {
-		return nil, err
+		log.Printf("Warning: file request broadcast encountered errors: %v", err)
 	}
 
 	// Wait for notification or timeout
@@ -225,7 +232,11 @@ func (s *FileServer) Store(ctx context.Context, key string, r io.Reader) error {
 				log.Printf("failed to read local file for streaming: %v", err)
 				return
 			}
-			defer fileReader.(io.Closer).Close()
+			defer func() {
+				if closer, ok := fileReader.(io.Closer); ok {
+					closer.Close()
+				}
+			}()
 
 			if err := s.sendStream(p, key, size, fileReader); err != nil {
 				log.Printf("failed to send stream to peer: %v", err)
