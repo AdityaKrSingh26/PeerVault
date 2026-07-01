@@ -1,0 +1,89 @@
+# PeerVault Configuration Example
+
+# Listen address for the local node's file server.
+# Default: ":3000"
+# Env var override: PEERVAULT_LISTEN
+listen_addr: ":3000"
+
+# Address to advertise to remote peers (IP:port). If left blank, it is
+# auto-detected (or local IP is used by default).
+# Env var override: PEERVAULT_ADVERTISE
+advertise_addr: ""
+
+# List of known bootstrap node addresses to connect to on startup.
+# Env var override: PEERVAULT_BOOTSTRAP (comma-separated string)
+bootstrap:
+  # - "192.168.1.100:3000"
+  # - "192.168.1.101:3000"
+
+# Run in interactive mode to accept command inputs from standard input.
+# Default: false
+# Env var override: PEERVAULT_INTERACTIVE
+interactive: false
+
+# Run in demo mode (stores and retrieves test data).
+# Default: false
+# Env var override: PEERVAULT_DEMO
+demo: false
+
+# Encryption key (32 bytes raw or 64 hex characters). Required.
+# Env var override: PEERVAULT_ENC_KEY or PEERVAULT_KEY
+enc_key: ""
+
+# Auto-detect public IP address using public HTTP endpoints.
+# Default: false
+# Env var override: PEERVAULT_PUBLIC_IP
+detect_public_ip: false
+
+# Enable verbose logging (equivalent to log_level: debug).
+# Default: false
+# Env var override: PEERVAULT_VERBOSE
+verbose: false
+
+# Enable debug mode.
+# Default: false
+# Env var override: PEERVAULT_DEBUG
+debug: false
+
+# Metrics server address (e.g. ":9090"). Disabled if empty.
+# Env var override: PEERVAULT_METRICS
+metrics_addr: ""
+
+# Enable local peer discovery on the LAN via mDNS.
+# Default: false
+# Env var override: PEERVAULT_DISCOVER_LOCAL
+discover_local: false
+
+# Enable peer exchange (PEX) protocol.
+# Default: false
+# Env var override: PEERVAULT_DISCOVER_PEX
+discover_pex: false
+
+# Storage quota limit (e.g. "10GB", "500MB").
+# Env var override: PEERVAULT_QUOTA
+quota: "10GB"
+
+# Logging output level. Allowed values: debug, info, warn, error.
+# Default: "info"
+# Env var override: PEERVAULT_LOG_LEVEL
+log_level: "info"
+
+# File retrieval timeout duration.
+# Default: "5s"
+# Env var override: PEERVAULT_FETCH_TIMEOUT
+fetch_timeout: "5s"
+
+# Periodic PEX peer cache exchange interval.
+# Default: "5m"
+# Env var override: PEERVAULT_PEX_INTERVAL
+pex_interval: "5m"
+
+# Garbage collection execution interval.
+# Default: "1h"
+# Env var override: PEERVAULT_GC_INTERVAL
+gc_interval: "1h"
+
+# Initial execution delay before garbage collection starts on boot.
+# Default: "5m"
+# Env var override: PEERVAULT_GC_DELAY
+gc_delay: "5m"

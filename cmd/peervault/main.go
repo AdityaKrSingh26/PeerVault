@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/gob"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -446,46 +445,25 @@ func interactiveMode(ctx context.Context, server *network.FileServer) {
 
 
 func main() {
-	// Command line flags
-	var (
-		listenAddr     = flag.String("addr", ":3000", "Listen address (e.g., :3000 or 0.0.0.0:3000)")
-		advertiseAddr  = flag.String("advertise", "", "Address to advertise to peers (auto-detected if not set)")
-		bootstrap      = flag.String("bootstrap", "", "Bootstrap nodes (comma-separated, e.g., 192.168.1.100:3000,192.168.1.101:4000)")
-		interactive    = flag.Bool("interactive", false, "Run in interactive mode")
-		demo           = flag.Bool("demo", false, "Run demo mode with test data")
-		encKey         = flag.String("key", "", "Encryption key (32 bytes for AES-256, can also use PEERVAULT_KEY env var)")
-		detectPublicIP = flag.Bool("public-ip", false, "Auto-detect and use public IP for advertise address")
-		verbose        = flag.Bool("verbose", false, "Enable verbose/debug logging")
-		debug          = flag.Bool("debug", false, "Enable debug mode (alias for verbose)")
-		metricsAddr    = flag.String("metrics", "", "Metrics server address (e.g., :9090) - disabled if not set")
-		discoverLocal  = flag.Bool("discover-local", false, "Enable mDNS local network peer discovery")
-		discoverPex    = flag.Bool("discover-pex", false, "Enable peer exchange (PEX) protocol")
-		quotaSize      = flag.String("quota", "", "Maximum storage quota (e.g., 5GB, 500MB) - configures automatically on first startup")
-		logLevel       = flag.String("log-level", "info", "log level: debug, info, warn, error")
-		fetchTimeout   = flag.Duration("fetch-timeout", 5*time.Second, "Fetch timeout for network files")
-		pexInterval    = flag.Duration("pex-interval", 5*time.Minute, "PEX peer list exchange interval")
-		gcInterval     = flag.Duration("gc-interval", 1*time.Hour, "Garbage collection execution interval")
-		gcDelay        = flag.Duration("gc-delay", 5*time.Minute, "Initial garbage collection execution delay")
-	)
-	flag.Parse()
+	cfg, err := LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize structured logger
-	if *verbose || *debug {
-		*logLevel = "debug"
+	if cfg.Verbose || cfg.Debug {
+		cfg.LogLevel = "debug"
 	}
-	slogLogger := logger.New(*logLevel)
+	slogLogger := logger.New(cfg.LogLevel)
 
-	// Get encryption key from flag or env var
+	// Get encryption key from config
 	var networkKey []byte
-	var keySource string
-	if *encKey != "" {
-		keySource = *encKey
-	} else if envKey := os.Getenv("PEERVAULT_KEY"); envKey != "" {
-		keySource = envKey
-	} else {
+	if cfg.EncKey == "" {
 		slogLogger.Error("-key is required. Generate one with: openssl rand -hex 32")
 		os.Exit(1)
 	}
+	keySource := cfg.EncKey
 
 	// If key is 64 characters of hex, decode it to 32 bytes
 	if len(keySource) == 64 {
@@ -505,23 +483,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Parse bootstrap nodes
-	var bootstrapNodes []string
-	if *bootstrap != "" {
-		bootstrapNodes = strings.Split(*bootstrap, ",")
-		// Trim whitespace
-		for i, node := range bootstrapNodes {
-			bootstrapNodes[i] = strings.TrimSpace(node)
-		}
-	}
-
 	// Determine advertise address
 	var finalAdvertiseAddr string
-	if *advertiseAddr != "" {
+	if cfg.AdvertiseAddr != "" {
 		// Use explicitly provided advertise address
-		finalAdvertiseAddr = *advertiseAddr
+		finalAdvertiseAddr = cfg.AdvertiseAddr
 		slogLogger.Info("Using advertise address", "address", finalAdvertiseAddr)
-	} else if *detectPublicIP {
+	} else if cfg.DetectPublicIP {
 		// Auto-detect public IP
 		slogLogger.Info("Detecting public IP address...")
 		publicIP, err := network.GetPublicIP()
@@ -529,26 +497,23 @@ func main() {
 			slogLogger.Warn("Failed to detect public IP", "err", err)
 			slogLogger.Info("Falling back to local IP")
 			localIP := network.GetLocalIP()
-			finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(localIP, *listenAddr)
+			finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(localIP, cfg.ListenAddr)
 		} else {
 			slogLogger.Info("Detected public IP", "ip", publicIP)
-			finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(publicIP, *listenAddr)
+			finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(publicIP, cfg.ListenAddr)
 		}
 	} else {
 		// Use local IP as default
 		localIP := network.GetLocalIP()
-		finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(localIP, *listenAddr)
+		finalAdvertiseAddr, _ = network.BuildAdvertiseAddr(localIP, cfg.ListenAddr)
 	}
 
 	// Create and start server
-	server := makeServer(*listenAddr, networkKey, slogLogger, *fetchTimeout, *pexInterval, *gcInterval, *gcDelay, bootstrapNodes...)
+	server := makeServer(cfg.ListenAddr, networkKey, slogLogger, cfg.FetchTimeout, cfg.PexInterval, cfg.GCInterval, cfg.GCDelay, cfg.Bootstrap...)
 
 	// Determine override quota
 	var initialQuota int64
-	quotaStr := *quotaSize
-	if quotaStr == "" {
-		quotaStr = os.Getenv("PEERVAULT_QUOTA")
-	}
+	quotaStr := cfg.QuotaSize
 	if quotaStr != "" {
 		bytes, err := quota.ParseStorageSize(quotaStr)
 		if err != nil {
@@ -598,22 +563,22 @@ func main() {
 	defer stop()
 
 	// Enable peer discovery if requested
-	if *discoverLocal {
+	if cfg.DiscoverLocal {
 		slogLogger.Info("Enabling local network discovery (mDNS)...")
 		if err := server.EnableLocalDiscovery(ctx, finalAdvertiseAddr); err != nil {
 			slogLogger.Warn("Failed to enable local discovery", "err", err)
 		}
 	}
 
-	if *discoverPex {
+	if cfg.DiscoverPex {
 		slogLogger.Info("Enabling peer exchange (PEX)...")
 		server.EnablePeerExchange(ctx)
 	}
 
 	// Start metrics server if enabled
 	var metricsServer *metrics.MetricsServer
-	if *metricsAddr != "" {
-		metricsServer = metrics.NewMetricsServer(*metricsAddr, server.Metrics)
+	if cfg.MetricsAddr != "" {
+		metricsServer = metrics.NewMetricsServer(cfg.MetricsAddr, server.Metrics)
 		go func() {
 			if err := metricsServer.Start(); err != nil && err != http.ErrServerClosed {
 				slogLogger.Error("Metrics server error", "err", err)
@@ -627,10 +592,10 @@ func main() {
 	go func() {
 		defer wg.Done()
 		slogLogger.Info("Starting PeerVault server",
-			"addr", *listenAddr,
+			"addr", cfg.ListenAddr,
 			"advertise", finalAdvertiseAddr,
 			"local_ip", network.GetLocalIP(),
-			"bootstrap", bootstrapNodes,
+			"bootstrap", cfg.Bootstrap,
 		)
 
 		if err := server.Start(ctx); err != nil && err != context.Canceled {
@@ -645,11 +610,11 @@ func main() {
 	}
 
 	if ctx.Err() == nil {
-		if *interactive {
+		if cfg.Interactive {
 			// Interactive mode
 			interactiveMode(ctx, server)
 			stop() // Signal loop cancellation on exit
-		} else if *demo {
+		} else if cfg.Demo {
 			// Demo mode - store and retrieve some test files
 			fmt.Println("Running demo mode...")
 
@@ -689,7 +654,7 @@ func main() {
 			stop() // Signal loop cancellation on exit
 		} else {
 			// Keep server running
-			fmt.Printf("PeerVault server running on %s\n", *listenAddr)
+			fmt.Printf("PeerVault server running on %s\n", cfg.ListenAddr)
 			fmt.Printf("Local IP: %s\n", network.GetLocalIP())
 			fmt.Printf("Use Ctrl+C to stop or --interactive flag for interactive mode\n")
 
